@@ -24,7 +24,7 @@ python3 console/serve.py --port 4173 --control-port 3300
 - 事故列表讀取 `GET /api/incidents`，依偵測時間新到舊排列；搜尋 ID、故障卡與狀態，篩選處理中／已結束。點事故讀取 `GET /api/incidents/{id}`，顯示摘要、根因與證據；定位節點時顯示目前快照，不冒充歷史快照。
 - 歷史列表 API 若回 404，清楚標示僅顯示 `state.incident`。其他 API 或格式錯誤會顯示錯誤，不自動換成錄影資料。
 - 即時模式連接 SSE `state`、`graph`、`incident`、`run`；收到新事故事件時重新讀取完整投影，不自行推算事故狀態。心跳納入新鮮度計算，6 秒無事件顯示 stale、15 秒 disconnected；重連間隔 1／2／4／8 秒，帶既有事故 cursor。
-- 本輪為只讀功能，不提供批准、中止、注入故障、Monitor log 時間線或聊天。
+- 只讀觀測，不提供批准、中止、注入故障或聊天。
 
 ## 錄影來源與人工檢查
 
@@ -44,3 +44,13 @@ python3 console/serve.py --port 4173 --control-port 3300
 - 錄影的 `hypothesis.concluded.changed_nodes` 使用舊值 `assessment: supported`，與正式節點契約的 `origin` 不同。因此錄影圖沿用 `snapshots.jsonl` 中合法的判定值，不把 `supported` 私自改名；根因文字仍可在事故詳情讀取。
 - 尚未使用完整 JSON Schema validator；前端只檢查必要資料形狀、ID 對應與位置等邊界。
 - 窄視窗下拓樸可捲動；縮放下限保留節點文字可讀性。
+
+## AI 事故模板預覽
+
+建置後開啟 <http://127.0.0.1:4173/incident-template.html>。原始碼為 `src/incident-template.html`，依 `message.txt` 的範例內容呈現 AI 結論、因果鏈、建議與可展開的日誌證據。日誌時間線可搜尋與分類；僅包含模板的七組日誌，不是完整原始日誌串流。這是獨立靜態預覽，未串接真實 AI 或事故 API。
+
+## 調查工作台與事故模板
+
+主頁改為左側 graph、右側調查面板，沿用事故模板的淺色、細分隔線與文字層級。右側保持 AI 結論，切換「調查事件」或「AI 事故報告」；報告呈現現有事故的起點、傳播路徑、修復提案與可展開證據。點右側服務名稱可定位左圖。窄於 761px 時上下排列。
+
+錄影直接讀既有 incident journal，隨時間滑桿回放；Monitor／Agent／系統分開標示，可篩選。這份錄影沒有 Monitor 原始 log，Monitor 頁籤會顯示空狀態。即時頁面接收 SSE incident 與草案 nightwatch.log.v1 的 log，僅保留本頁收到的事件，不宣稱完整歷史；Monitor 的後端投影仍待正式契約同步與實機驗證。
