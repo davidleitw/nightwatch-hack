@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NightWatch hackathon incident event — proposed frontend requirements",
+  "description": "The existing SSE incident commit, with explicit graph/evidence references and typed tool payloads. Other existing event types remain valid.",
+  "allOf": [
+    { "$ref": "../../contracts/schemas/incident-commit.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "event": {
+          "type": "object",
+          "required": ["refs"],
+          "properties": {
+            "refs": {
+              "type": "object",
+              "required": ["node_ids", "evidence_ids"],
+              "properties": {
+                "node_ids": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+                "evidence_ids": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "type": { "const": "tool.started" } }, "required": ["type"] },
+              "then": {
+                "required": ["payload"],
+                "properties": {
+                  "payload": {
+                    "type": "object",
+                    "required": ["call_id", "tool", "args", "note_zh"],
+                    "properties": {
+                      "call_id": { "type": "string", "minLength": 1 },
+                      "tool": { "type": "string", "minLength": 1 },
+                      "args": { "type": "object" },
+                      "note_zh": { "type": "string", "minLength": 1 }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": { "properties": { "type": { "const": "observation.recorded" } }, "required": ["type"] },
+              "then": {
+                "required": ["payload"],
+                "properties": {
+                  "payload": {
+                    "type": "object",
+                    "required": ["call_id", "tool", "duration_ms", "source", "result", "evidence_ids", "usage"],
+                    "properties": {
+                      "call_id": { "type": "string", "minLength": 1 },
+                      "tool": { "type": "string", "minLength": 1 },
+                      "duration_ms": { "type": "number", "minimum": 0 },
+                      "source": { "enum": ["prometheus", "jaeger", "logstore", "http", "graph"] },
+                      "result": { "type": "object" },
+                      "evidence_ids": { "type": "array", "items": { "type": "string" } },
+                      "usage": {
+                        "type": "object",
+                        "required": ["round"],
+                        "properties": {
+                          "round": {
+                            "type": "object",
+                            "required": ["input_tokens", "cached_tokens", "output_tokens"],
+                            "properties": {
+                              "input_tokens": { "type": "integer", "minimum": 0 },
+                              "cached_tokens": { "type": "integer", "minimum": 0 },
+                              "output_tokens": { "type": "integer", "minimum": 0 }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": { "properties": { "type": { "const": "hypothesis.concluded" } }, "required": ["type"] },
+              "then": {
+                "required": ["payload"],
+                "properties": {
+                  "payload": {
+                    "type": "object",
+                    "required": ["hypothesis"],
+                    "properties": {
+                      "hypothesis": { "$ref": "../../contracts/schemas/agent-report.schema.json" }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

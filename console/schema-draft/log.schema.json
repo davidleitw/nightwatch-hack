@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NightWatch live monitor log — proposed frontend projection",
+  "description": "Proposed data payload for SSE event: log on the existing /events connection. This is a frontend projection, not the raw monitor ingest contract.",
+  "type": "object",
+  "required": ["schema_version", "event_id", "monitor_id", "occurred_at", "level", "message", "refs"],
+  "properties": {
+    "schema_version": { "const": "nightwatch.log.v1" },
+    "event_id": { "type": "string", "minLength": 1 },
+    "monitor_id": { "type": "string", "minLength": 1 },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+    },
+    "level": { "enum": ["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"] },
+    "message": { "type": "string" },
+    "refs": {
+      "type": "object",
+      "required": ["node_ids"],
+      "properties": {
+        "node_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "additionalProperties": false
+    },
+    "instance_id": { "type": "string", "minLength": 1 },
+    "invocation_id": { "type": "string", "minLength": 1 },
+    "attributes": { "type": "object" }
+  },
+  "additionalProperties": false
+}

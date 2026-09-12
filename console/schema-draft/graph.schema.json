@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NightWatch hackathon graph — dynamic node list",
+  "description": "Extends the current snapshot contract. The UI targets 8–12 nodes; count and service IDs are not hard-coded. Backend validation must enforce unique node IDs and edge endpoint membership.",
+  "allOf": [
+    {
+      "$ref": "../../contracts/schemas/snapshot.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/nodeId"
+              }
+            }
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/nodeId"
+              },
+              "to": {
+                "$ref": "#/$defs/nodeId"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "nodeId": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}
