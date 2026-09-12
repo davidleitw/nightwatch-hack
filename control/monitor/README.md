@@ -65,12 +65,8 @@ custom_sink 只需實作 `emit(event)`，runtime 不依賴檔案格式；輸出�
 不取代應用程式的結果或例外。`configure_file_sink(path)` 為預設 runtime 增加輸出位置，
 重複設定同一路徑不重複輸出。
 
-```sh
-cd control
-uv run --no-project --python 3.13 python -m unittest discover -s tests -p 'test_monitor.py' -v
-```
-
-目前提供程序內 API，尚未將 detail 接入 HTTP、SSE 或 graph 健康判定。
+Detail 仍是程序內 API；Guard Room 可讀取預設 JSONL 或以下 HTTP sink 的事件，
+依啟動 config 建立 graph。流程見 [Guard Room README](../../guardroom/README.md)。
 
 ## Console log projection
 
@@ -103,11 +99,51 @@ logging 事件使用 `LogRecord.created` 的 UTC 時間；生命週期使用事�
 未知自訂 log level 明確拒絕投影，透過 runtime 使用時會計入 sink_errors。
 
 原始事件新增 monitor_id、node_ids、instance_id，原有欄位保留。
-此處只建立 payload，尚未實作 SSE 傳輸、重播或 HTTP 接線。
+ConsoleLogSink 本身只建立 payload；HTTP 傳輸由下方 GuardRoomSink 負責。
 
-包含 console schema 驗證的測試：
+## 傳送到 Guard Room
 
-```sh
-cd control
-uv run --no-project --python 3.13 --with 'jsonschema>=4.23,<5' python -m unittest discover -s tests -p 'test_monitor*.py' -v
+GuardRoomSink 使用背景 thread 批次 POST；emit 只投影、序列化與非阻塞入列。
+先啟動 `./guardroom/restart.sh`，應用程式再建立 sink：
+
+```python
+import logging
+from monitor import GuardRoomSink, GuardRoomSinkConfig, MonitorConfig, MonitorRuntime, monitor
+
+sink = GuardRoomSink(GuardRoomSinkConfig(
+    endpoint="http://127.0.0.1:8001/api/logs",
+)).start()
+runtime = MonitorRuntime(sinks=(sink,))
+
+@monitor(MonitorConfig(monitor_id="payment-monitor", node_ids=("payment",)), runtime=runtime)
+def payment():
+    logging.getLogger(__name__).warning("付款重試")
+
+try:
+    payment()
+finally:
+    drained = sink.close(timeout=5)
+    print(sink.stats())
 ```
+
+服務應在 startup 建立／start，在 shutdown close；也支援 `with GuardRoomSink(...) as sink:`。
+async shutdown 可用 `await asyncio.to_thread(sink.close, 5)` 避免阻塞 event loop。
+跨程序要各自建立 sink；不可在 fork 前啟動背景 thread。
+
+預設 batch_size=50、flush_interval_seconds=0.5、queue_capacity=1000、timeout_seconds=3、
+max_retries=3、retry_delay_seconds=0.25。單筆序列化超過 max_event_bytes（預設 256 KiB）
+會丟棄；queue 容量之外最多還有一批正在組裝／傳送的事件。
+
+timeout、網路錯誤、429、5xx 會退避重試，其他 HTTP 錯誤不重試。
+重試保留原始 event_id 與 body。stats 提供 queued、in_flight、sent、retried、dropped、
+last_error、closed；sent 是收到 HTTP 2xx 的事件數（包含接收端判定為重複的事件），
+retried 是批次重試次數。last_error 保留最後錯誤，成功不清空。
+
+queue 滿時丟棄新事件；未 start 或 close 後 emit 也計入 dropped。
+close 回傳 True 代表 worker 已結束，不保證所有事件送達，需搭配 dropped 檢查。
+超過 close 期限回傳 False，停止後续重試／傳送；正在進行的 HTTP 呼叫仍可能完成，
+待其返回後清理剩餘 queue，因此統計可能稍後更新。可再次 close 等待 worker 結束。
+
+目前使用記憶體 queue，無磁碟 spool／重啟重播。HTTP 成功只表示 Guard Room 接收，
+不保證 console 已顯示。Docker 裡的 127.0.0.1 是容器自己，endpoint 必須設定為
+該環境可達的 Guard Room 位址。既有 shop-web 尚未自動切換到 HTTP sink。

@@ -10,6 +10,8 @@ services:
     volumes:
       - shop-data:/data
       - shop-logs:/logs
+      - ../control/monitor:/app/monitor:ro
+      - ../control/tmp:/app/tmp
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]

@@ -9,6 +9,7 @@ from .adapters import JsonlSink, install_logging
 from .models import EventSink, MonitorConfig, MonitorEvent, MonitorState
 from .runtime import MonitorRuntime
 from .console import ConsoleLogSink, to_console_log
+from .guardroom import GuardRoomSink, GuardRoomSinkConfig
 
 DEFAULT_SINK_PATH = Path(__file__).resolve().parents[1] / "tmp" / "monitor.jsonl"
 _default_runtime = MonitorRuntime((JsonlSink(DEFAULT_SINK_PATH),))
@@ -79,4 +80,5 @@ __all__ = [
     "MonitorRuntime", "MonitorState", "configure_file_sink", "get_detail", "get_states",
     "install_logging", "monitor",
     "ConsoleLogSink", "to_console_log",
+    "GuardRoomSink", "GuardRoomSinkConfig",
 ]

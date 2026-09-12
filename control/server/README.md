@@ -1,35 +1,30 @@
 # Control graph server
 
-獨立的 uv 專案，需要 Python 3.11 以上。
+獨立 uv 專案，Python 3.11+。啟動時讀 `GUARDROOM_CONFIG`，預設
+`guardroom/shop-web.config.json`。config 提供拓撲，monitor log 提供節點量測，
+graph state 儲存於本機 JSON checkpoint，重啟後接續讀取。
 
-其他前端 API 已掛到同一個 app，清單與操作範例見
-[前端 API 文件](../FRONTEND-API.md)。新增介面的假資料預設關閉，
-以環境 flag `NIGHTWATCH_MOCK_DATA=1` 啟用；既有 graph dummy 不受此 flag 影響。
+```sh
+./guardroom/restart.sh
+curl http://127.0.0.1:8001/api/graph
+```
 
-一鍵背景啟動／重啟：從 repo 根目錄執行 `./guardroom/restart.sh`（預設 port 8001），
-詳細說明見 [guardroom README](../../guardroom/README.md)。以下為手動開發啟動方式。
+手動開發：
 
 ```sh
 cd control/server
 uv sync --locked
-uv run uvicorn main:app --reload --host 127.0.0.1 --port 8000
+uv run uvicorn main:app --reload --host 127.0.0.1 --port 8001
 ```
 
-- `GET http://127.0.0.1:8000/api/graph`：回傳 graph JSON 假資料，包含 10 個節點與 9 條示範連線。
-- `http://127.0.0.1:8000/docs`：Swagger UI，含 response schema。
-- `http://127.0.0.1:8000/openapi.json`：完整 OpenAPI 定義。
+完整流程、config、snapshot、shop-web 操作範例與限制見
+[Guard Room README](../../guardroom/README.md)。僅支援單一 worker。
 
-```sh
-curl http://127.0.0.1:8000/api/graph
-curl 'http://127.0.0.1:8000/api/graph?state=normal'
-curl 'http://127.0.0.1:8000/api/graph?state=problem'
-```
+- GET /api/graph：最新 monitor graph。
+- GET /api/graph?state=normal|problem：dummy 預覽。
+- POST /api/logs：接收並持久化 log、更新 graph。
+- GET /events：即時 SSE log。
+- /docs、/openapi.json：API 文件。
 
-`state` 預設 `normal`；`problem` 模擬 payment 故障及 checkout、frontend 受影響。
-參數僅影響當次回應，其他值回傳 HTTP 422。
-
-回傳的是符合 graph schema 的資料實例；schema 定義可從 OpenAPI 取得。
-沿用前端草案的 `nightwatch.snapshot.v2` 欄位格式。所有量測及連線都是
-示範資料，時間與 seq 固定；未連接 monitor、Prometheus 或 Jaeger，
-所以 sources 的 ok 與 edges 的 observed 均為 false。
-可修改 `main.py` 的 `dummy_graph()` 調整示範節點與連線。
+其他前端 API 見 [前端 API 文件](../FRONTEND-API.md)，其 mock 預設關閉，
+可用 `NIGHTWATCH_MOCK_DATA=1` 啟用；live graph 尚未接入 /api/state 與 SSE graph。

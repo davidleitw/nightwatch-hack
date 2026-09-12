@@ -1,9 +1,17 @@
-"""Standalone dummy graph API. All graph measurements are synthetic."""
+"""Config-driven graph snapshots from monitor logs, plus explicit mock previews."""
 
+import asyncio
+from contextlib import asynccontextmanager, suppress
+import logging
+import os
+from pathlib import Path
 from typing import Literal
 
+import uvicorn
 from fastapi import FastAPI, Query
 from pydantic import BaseModel, Field
+from logs import LogHub, create_log_router
+from graph_state import GraphStore
 
 from frontend_api import install_frontend
 
@@ -16,11 +24,11 @@ class Trend(BaseModel):
 
 class Node(BaseModel):
     id: str = Field(min_length=1)
-    kind: Literal["service", "queue"] = "service"
-    traffic: float = 12.0
-    errors: float = 0.0
-    p95_ms: float = 40.0
-    saturation: float = 0.2
+    kind: Literal["service", "datastore", "queue", "volume", "synthetic", "external"] = "service"
+    traffic: float | None = 12.0
+    errors: float | None = 0.0
+    p95_ms: float | None = 40.0
+    saturation: float | None = 0.2
     alive: bool = True
     sat_label: str = "utilization"
     status: Literal["ok", "warning", "failing", "unknown"] = "ok"
@@ -34,10 +42,10 @@ class Node(BaseModel):
 class Edge(BaseModel):
     source: str = Field(alias="from")
     to: str
-    kind: Literal["calls", "publishes", "consumes"] = "calls"
-    rps: float = 12.0
-    errors: float = 0.0
-    p95_ms: float = 20.0
+    kind: Literal["calls", "uses", "publishes", "consumes"] = "calls"
+    rps: float | None = 12.0
+    errors: float | None = 0.0
+    p95_ms: float | None = 20.0
     observed: bool = False
 
 
@@ -108,21 +116,57 @@ def dummy_graph(state: Literal["normal", "problem"] = "normal") -> Graph:
     return graph
 
 
+@asynccontextmanager
+async def lifespan(app):
+    default_config = Path(__file__).resolve().parents[2] / "guardroom/shop-web.config.json"
+    store = GraphStore(os.getenv("GUARDROOM_CONFIG", str(default_config)))
+    app.state.graph_store = store
+    log_hub.store = store
+    logs, cursor = store.read_file()
+    store.commit(logs, cursor)
+
+    async def follow_logs():
+        while True:
+            await asyncio.sleep(1)
+            try:
+                logs, cursor = store.read_file()
+                log_hub.publish(store.commit(logs, cursor))
+            except Exception:
+                # Keep the previous snapshot/cursor so the next tick retries the batch.
+                logging.getLogger(__name__).exception("Graph snapshot update failed")
+
+    task = asyncio.create_task(follow_logs())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        log_hub.store = None
+
+
 app = FastAPI(
     title="NightWatch Control API",
     version="0.1.0",
-    description="Dummy graph data for frontend integration; no live monitoring.",
+    description="Config topology and file-backed monitor graph snapshots.",
+    lifespan=lifespan,
 )
+log_hub = LogHub()
+app.include_router(create_log_router(log_hub))
 
 
-@app.get("/api/graph", response_model=Graph, summary="Get dummy graph snapshot")
+@app.get("/api/graph", response_model=Graph, summary="Get current monitor graph snapshot")
 def get_graph(
-    state: Literal["normal", "problem"] = Query(
-        default="normal", description="Select normal or problem dummy graph state."
+    state: Literal["normal", "problem"] | None = Query(
+        default=None, description="Optional explicit dummy preview; omitted returns the live snapshot."
     ),
 ) -> Graph:
-    """Return a synthetic snapshot; state applies only to this request."""
-    return dummy_graph(state)
+    """Read the committed snapshot; preview requests do not modify it."""
+    return dummy_graph(state) if state is not None else Graph.model_validate(app.state.graph_store.snapshot)
 
 
 install_frontend(app, graph_provider=dummy_graph)
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="127.0.0.1", port=9999)

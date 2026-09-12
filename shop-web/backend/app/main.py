@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Path as ApiPath, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from monitor import MonitorConfig, monitor
 
 from .logging_config import configure_logging, logger, shutdown_logging
 
@@ -414,19 +415,26 @@ def _order_lines_from_items(
 
 
 @app.get("/api/health")
+@monitor(MonitorConfig(name="GET /api/health", monitor_id="shop.health"))
 def health():
     with connect() as db:
-        db.execute("SELECT 1 FROM orders LIMIT 1")
+        _query(db, "SELECT 1 FROM orders LIMIT 1")
     return {"status": "ok"}
 
 
 @app.get("/api/products", response_model=list[ProductResponse])
+@monitor(MonitorConfig(name="GET /api/products", monitor_id="shop.products"))
 def products():
     with connect() as db:
-        rows = db.execute(
+        rows = _query(db,
             f"SELECT {PRODUCT_SELECT} FROM products ORDER BY id"
-        ).fetchall()
+        )
     return [_product_payload(row) for row in rows]
+
+
+@monitor(MonitorConfig(name="shop database query", monitor_id="shop.db.query"))
+def _query(db: sqlite3.Connection, sql: str):
+    return db.execute(sql).fetchall()
 
 
 @app.get("/api/products/{product_id}", response_model=ProductResponse)

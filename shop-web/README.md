@@ -30,7 +30,15 @@ Compose 預設 project name 是 `nightwatch-shop-web`，因此訂單 volume 的�
 
 ## Makefile 指令
 
-Makefile 預設使用 `docker compose`，並以 `nightwatch-shop-web` 作為 Compose project name；所有指令都使用上述本機測試/demo 環境。若主機只有舊版獨立 Compose CLI，可加上 `COMPOSE=docker-compose`，連接埠與 project name 不變。
+```sh
+./restart.sh          # 重建並重啟
+./restart.sh --close  # 停止服務，保留容器與資料
+./restart.sh --open   # 啟動服務，不重新 build（需已有 images）
+```
+
+執行 `./restart.sh` 可重建並重啟前後端、保留訂單資料，等待健康檢查並驗證 API。腳本可從任意工作目錄呼叫，預設沿用現有容器的 ports；尚未啟動時使用前端 8080、後端 8000。可用 `FRONTEND_PORT`、`BACKEND_PORT`、`PROJECT_NAME` 環境變數覆寫。失敗時輸出容器狀態與最近日誌。
+
+Makefile 預設使用 `docker compose`，並在每個 Compose 指令加入 `-p $(PROJECT_NAME)`；預設值是 `PROJECT_NAME=nightwatch-shop-web`，設定來源都是 `compose.yaml`。也可以用 `COMPOSE=docker-compose` 指定舊版獨立 Compose CLI。下表的 Docker 指令以預設 project name 展開；若覆寫 `PROJECT_NAME`，請將 `nightwatch-shop-web` 換成指定的值。
 
 | 指令 | 用途 | 等價 Docker Compose 操作 |
 | --- | --- | --- |
