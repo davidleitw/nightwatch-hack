@@ -211,7 +211,7 @@ async def get_graph(
     return dummy_graph(state) if state is not None else Graph.model_validate(app.state.graph_store.snapshot)
 
 
-install_frontend(app, graph_provider=dummy_graph, log_hub=log_hub)
+install_frontend(app, graph_provider=dummy_graph, log_hub=log_hub, live=True)
 install_investigations(app)
 
 

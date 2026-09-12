@@ -1,5 +1,7 @@
 # NightWatch hackathon：前後端 schema 交接
 
+Guard Room 實際接線請看 [接線與後端交接清單](../GUARDROOM-INTEGRATION.md)：即時調查已改用 `/api/investigations` 的獨立 state、stream、歷史與報告。下方 state/event schema 保留舊事故契約，不拿來驗證新的 investigation envelope；graph 與 Monitor log 仍沿用既有格式。
+
 新增：[Agent token 與 Prompt cache 命中率](USAGE.md)；`usage.schema.json` 約束既有事故 `usage` 欄位，`state.schema.json` 引用它。用量為事故累計快照，UI 不累加工具事件。
 
 目前已確定：**左側以 8–12 個節點為版面目標，數量與服務名單不寫死；monitor log 收到就出現在右側，與 Agent 調查紀錄共用時間線。**

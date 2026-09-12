@@ -1,4 +1,4 @@
-"""Serve the static console and proxy read-only control APIs on loopback."""
+"""Serve the console, stream control GETs, and forward investigation creation."""
 import argparse
 import http.client
 import json
@@ -13,7 +13,7 @@ from mock_control import MockControl
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=4173)
-    parser.add_argument('--control-port', type=int, default=3300)
+    parser.add_argument('--control-port', type=int, default=8001)
     parser.add_argument('--control-url', default=os.environ.get('NIGHTWATCH_CONTROL_URL'),
                         help='HTTP(S) control base URL; defaults to the local --control-port')
     parser.add_argument('--mock', action='store_true', help='Explicit local simulation; no upstream requests')
@@ -50,12 +50,46 @@ def main():
             if mock:
                 scenario = parse_qs(urlsplit(self.path).query).get('scenario', ['cycle'])[0]
                 return mock.handle(self, path, scenario)
+            return self.proxy_request('GET')
+
+        def do_POST(self):
+            if urlsplit(self.path).path != '/api/investigations':
+                return self.send_json(405, {'error': {'code': 'method_not_allowed', 'message_zh': '此代理只允許建立調查。', 'details': {}}})
+            if mock:
+                return self.send_json(503, {'error': {'code': 'unavailable', 'message_zh': '本機模擬不支援真實調查。', 'details': {}}})
+            origin = self.headers.get('Origin')
+            if origin and origin != f'http://{self.headers.get("Host")}':
+                return self.send_json(403, {'error': {'code': 'forbidden', 'message_zh': '調查必須由同源前端送出。', 'details': {}}})
+            if self.headers.get('Transfer-Encoding'):
+                return self.send_json(400, {'error': {'code': 'invalid_request', 'message_zh': '不支援分塊的建立請求。', 'details': {}}})
+            try:
+                length = int(self.headers.get('Content-Length', ''))
+                if not 0 < length <= 65536:
+                    raise ValueError()
+            except ValueError:
+                return self.send_json(400, {'error': {'code': 'invalid_request', 'message_zh': '建立請求需要合法 Content-Length（1–65536）。', 'details': {}}})
+            if self.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json':
+                return self.send_json(415, {'error': {'code': 'invalid_request', 'message_zh': '建立請求必須使用 application/json。', 'details': {}}})
+            self.connection.settimeout(10)
+            try:
+                body = self.rfile.read(length)
+            except TimeoutError:
+                return self.send_json(408, {'error': {'code': 'invalid_request', 'message_zh': '讀取建立請求逾時。', 'details': {}}})
+            if len(body) != length:
+                return self.send_json(400, {'error': {'code': 'invalid_request', 'message_zh': '建立請求不完整。', 'details': {}}})
+            return self.proxy_request('POST', body)
+
+        def proxy_request(self, method, body=None):
             transport = http.client.HTTPSConnection if target.scheme == 'https' else http.client.HTTPConnection
             connection = transport(target.hostname, target.port, timeout=20)
             sent = False
             try:
-                connection.request('GET', target.path.rstrip('/') + self.path,
-                                   headers={'Accept': self.headers.get('Accept', 'application/json')})
+                headers = {'Accept': self.headers.get('Accept', 'application/json')}
+                if body is not None:
+                    headers['Content-Type'] = 'application/json'
+                if self.headers.get('Last-Event-ID') is not None:
+                    headers['Last-Event-ID'] = self.headers['Last-Event-ID']
+                connection.request(method, target.path.rstrip('/') + self.path, body=body, headers=headers)
                 response = connection.getresponse()
                 self.send_response(response.status)
                 self.send_header('Content-Type', response.getheader('Content-Type', 'application/json'))

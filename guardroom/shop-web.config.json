@@ -10,7 +10,12 @@
   },
   "monitors": [
     {"monitor_id": "shop.health", "node_id": "shop-health", "kind": "service"},
-    {"monitor_id": "shop.products", "node_id": "shop-products", "kind": "service"},
+    {
+      "monitor_id": "shop.products",
+      "node_id": "shop-products",
+      "kind": "service",
+      "latency": {"warning_ms": 500, "min_samples": 20}
+    },
     {"monitor_id": "shop.db.query", "node_id": "shop-db", "kind": "datastore"}
   ],
   "edges": [

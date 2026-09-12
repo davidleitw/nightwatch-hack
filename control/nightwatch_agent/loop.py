@@ -14,23 +14,25 @@ from typing import Any, Literal
 
 from jsonschema import Draft202012Validator, ValidationError
 from openai import APIError
-from pydantic_ai import Agent, ModelRetry, RunContext, Tool, capture_run_messages
+from pydantic_ai import Agent, ModelRetry, RunContext, Tool, ToolOutput
 from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models import Model
 from pydantic_ai.usage import RunUsage, UsageLimits
 
-from .prompts import SYSTEM_PROMPT, tool_description
+from .prompts import GUARDROOM_PROMPT, GRAPH_SYSTEM_PROMPT, SYSTEM_PROMPT, tool_description
+from .report import InvestigationReportBody, REPORT_VERSION, SUBMIT_DESCRIPTION, submit_definition, validate_submission
 
 Json = dict[str, Any]
 ContextCallback = Callable[[Json], None]
 TOOL_CAPS = {
     "get_graph": 16384,
+    "list_graph_snapshots": 65536,
     "get_node_history": 3072,
     "get_node_detail": 2048,
     "find_traces": 4096,
     "get_trace": 8192,
-    "search_logs": 4096,
+    "search_logs": 16384,
     "query_metric": 1024,
     "run_health_check": 2048,
     "inspect_runtime": 6144,
@@ -166,8 +168,8 @@ def make_tool(definition: Json) -> Tool[Investigation]:
             if name == "get_trace" and args["trace_id"] not in state.trace_ids:
                 raise ValueError("trace_id must come from a successful find_traces call in this investigation")
             observed = await asyncio.wait_for(state.backend(name, args), timeout=10)
-            if name == "get_graph" and len(encode(observed.result).encode()) > TOOL_CAPS[name]:
-                raise ValueError("Graph exceeds the 16 KiB tool limit; refusing to drop nodes or edges from the topology")
+            if name in {"get_graph", "list_graph_snapshots"} and len(encode(observed.result).encode()) > TOOL_CAPS[name]:
+                raise ValueError("Graph or snapshot index exceeds its tool limit; refusing to drop topology or pagination entries")
             result = bounded_result(observed.result, TOOL_CAPS[name])
             if "error" in result:
                 raise ValueError(result["error"])
@@ -201,7 +203,12 @@ def make_tool(definition: Json) -> Tool[Investigation]:
 def static_instructions(capabilities: Json, report_schema: Json) -> str:
     nodes = [{"id": node["id"], "kind": node["kind"]} for node in capabilities["nodes"]]
     names = [definition["name"] for definition in capabilities["tools"]]
-    return SYSTEM_PROMPT + "available_tools=" + encode(names) + "\nnodes=" + encode(nodes) + "\nreport_schema=" + encode(report_schema)
+    graph_mode = "get_graph" in names
+    prompt = GRAPH_SYSTEM_PROMPT + GUARDROOM_PROMPT if graph_mode else SYSTEM_PROMPT
+    if graph_mode:
+        names.append("submit_report")
+        report_schema = InvestigationReportBody.model_json_schema()
+    return prompt + "available_tools=" + encode(names) + "\nnodes=" + encode(nodes) + "\nreport_schema=" + encode(report_schema)
 
 
 def validate_report(report: Json, state: Investigation, node_ids: set[str]) -> None:
@@ -257,25 +264,49 @@ async def investigate(
          "parameters": copy.deepcopy(definition["parameters"])}
         for definition in definitions
     ]
+    graph_mode = "get_graph" in names
+    if graph_mode:
+        tools_context.append(submit_definition())
     opening_context = {**copy.deepcopy(opening), "budget": state.budget()}
     model_name = model if isinstance(model, str) else getattr(model, "model_name", type(model).__name__)
-    if on_context:
-        on_context({
-            "instructions": instructions,
-            "tools": tools_context,
-            "opening": opening_context,
-            "model": {"name": str(model_name), "settings": copy.deepcopy(model_settings)},
-            "messages": [],
-        })
+    messages: list[ModelMessage] = []
+    usage = RunUsage()
+
+    def save_context() -> None:
+        if on_context:
+            from pydantic_ai.messages import ModelMessagesTypeAdapter
+            usage_data = asdict(usage)
+            if usage_data["cost"] is not None:
+                usage_data["cost"] = str(usage_data["cost"])
+            on_context({
+                "instructions": instructions, "tools": tools_context, "opening": opening_context,
+                "model": {"name": str(model_name), "settings": copy.deepcopy(model_settings)},
+                "messages": json.loads(ModelMessagesTypeAdapter.dump_json(messages)),
+                "usage": usage_data,
+            })
+
+    save_context()
     agent = Agent(
-        model, deps_type=Investigation, output_type=str,
+        model, deps_type=Investigation,
+        output_type=ToolOutput(InvestigationReportBody, name="submit_report", description=SUBMIT_DESCRIPTION)
+        if graph_mode else str,
         instructions=instructions,
         tools=[make_tool(definition) for definition in definitions], retries=1,
         model_settings=model_settings,
     )
 
     @agent.output_validator
-    def check_output(ctx: RunContext[Investigation], output: str) -> str:
+    def check_output(ctx: RunContext[Investigation], output: Any) -> Any:
+        if graph_mode:
+            call_id = ctx.tool_call_id or state.call_id()
+            state.emit("tool.started", call_id=call_id, tool="submit_report", args=output.model_dump())
+            try:
+                validate_submission(output, state.evidence, node_ids)
+            except ValueError as error:
+                state.emit("tool.failed", call_id=call_id, tool="submit_report", error=safe_error(error))
+                raise ModelRetry(str(error)) from error
+            state.emit("report.submitted", call_id=call_id, tool="submit_report", report=output.model_dump())
+            return output
         if output.startswith("inconclusive:") and output.removeprefix("inconclusive:").strip():
             return output
         try:
@@ -287,17 +318,28 @@ async def investigate(
             raise ModelRetry("Invalid report format or evidence references; resubmit once: " + safe_error(error)) from error
         return output
 
-    messages: list[ModelMessage] = []
-    usage = RunUsage()
     report = None
     try:
-        with capture_run_messages() as messages:
-            async with asyncio.timeout(limits.max_secs):
-                result = await agent.run(
-                    encode({**opening, "budget": state.budget()}), deps=state, usage=usage,
-                    usage_limits=UsageLimits(request_limit=limits.max_tool_calls + 3, total_tokens_limit=limits.max_tokens),
-                )
-        if result.output.startswith("inconclusive:"):
+        async with asyncio.timeout(limits.max_secs):
+            async with agent.iter(
+                encode(opening_context), deps=state, usage=usage,
+                usage_limits=UsageLimits(request_limit=limits.max_tool_calls + 3, total_tokens_limit=limits.max_tokens),
+            ) as agent_run:
+                try:
+                    async for _node in agent_run:
+                        messages = agent_run.all_messages()
+                        save_context()
+                finally:
+                    messages = agent_run.all_messages()
+                    save_context()
+                result = agent_run.result
+        if result is None:
+            raise UnexpectedModelBehavior("Agent ended without a final output")
+        if graph_mode:
+            report = {"schema_version": REPORT_VERSION, **result.output.model_dump()}
+            status = "report_ready" if report["conclusion"] == "supported" else "unresolved"
+            reason = report["summary_zh"]
+        elif result.output.startswith("inconclusive:"):
             status, reason = "unresolved", result.output
         else:
             status, reason, report = "report_ready", "報告已通過格式、程序與引用檢查；等待後續稽核。", json.loads(result.output)
@@ -309,18 +351,4 @@ async def investigate(
     usage_data = asdict(usage)
     if usage_data["cost"] is not None:
         usage_data["cost"] = str(usage_data["cost"])
-    if on_context:
-        from pydantic_ai.messages import ModelMessagesTypeAdapter
-
-        # PydanticAI messages are dataclasses rather than Pydantic models.  Its
-        # adapter preserves tool calls/returns and applies the framework's JSON
-        # redaction rules to arbitrary tool content.
-        serialized_messages = json.loads(ModelMessagesTypeAdapter.dump_json(messages))
-        on_context({
-            "instructions": instructions,
-            "tools": tools_context,
-            "opening": opening_context,
-            "model": {"name": str(model_name), "settings": copy.deepcopy(model_settings)},
-            "messages": serialized_messages,
-        })
     return LoopResult(status, reason, report, state.evidence, state.events, usage_data, messages)

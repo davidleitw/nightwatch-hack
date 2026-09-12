@@ -63,8 +63,9 @@ The SQLite active constraint is still needed even with the process lock.
 `http://127.0.0.1:8001/api/graph`. It is operator configuration, never POST input.
 Use the existing GraphAPI projection and actual investigate() function. Do not
 mix the old recording with new graph evidence. The real runner uses the existing
-model environment configuration and English prompts. No automatic model call on
-startup, SSE connection or GET. No production fake-model switch or hard-coded
+model environment configuration and English prompts. The subsequently authorized
+Monitor detector can create a session after three fresh abnormal snapshots; SSE
+connections and GET requests do not create sessions. No production fake-model switch or hard-coded
 conclusion. Missing model configuration produces a durable failed investigation
 with an explicit report. Dependency injection for offline tests is allowed.
 
@@ -146,8 +147,10 @@ Same request_id and normalized body returns the original 202 identity even after
 completion; do not run again. Reusing request_id with different content gives 409
 `request_conflict`. A different request while active gives 409
 `investigation_active`, `details.active_investigation_id`. Check replay before busy.
-The detector can invoke the same manager create method, not bypass persistence or
-one-at-a-time admission. Do not implement an automatic detector in this task.
+The detector invokes the same manager create method, without bypassing persistence
+or one-at-a-time admission. The subsequently authorized Monitor detector and its
+durable flag/recovery rules are documented in server/README.md. This extends the
+original manual-only scope; no public session API fields change.
 
 State shape:
 

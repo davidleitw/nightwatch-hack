@@ -6,6 +6,7 @@ import asyncio
 import copy
 import inspect
 import json
+import logging
 import os
 import re
 import time
@@ -13,20 +14,25 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable, Literal
 from uuid import uuid4
+from urllib.parse import urlsplit
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from frontend_api import APIError
+from detector import GraphDetector
+from frontend_live import saved_snapshots
 from investigation_store import ActiveInvestigation, InvestigationStore, RequestConflict
 from nightwatch_agent.graph import GraphAPI
 from nightwatch_agent.loop import Limits, investigate, safe_error
 from nightwatch_agent.prompts import tool_description
+from nightwatch_agent.report import InvestigationReportBody
 
 
 Json = dict[str, Any]
 SCHEMAS = Path(__file__).resolve().parents[2] / "contracts" / "schemas"
+LOG = logging.getLogger(__name__)
 
 
 class InvestigationAPIError(APIError):
@@ -63,6 +69,10 @@ class InvestigationSummary(BaseModel):
     event_seq: int
 
 
+class SavedInvestigationReport(InvestigationReportBody):
+    schema_version: Literal["nightwatch.investigation-report.v1"]
+
+
 class InvestigationReport(BaseModel):
     investigation_id: str
     outcome: str
@@ -70,6 +80,7 @@ class InvestigationReport(BaseModel):
     started_at: str
     closed_at: str
     agent_report: dict[str, Any] | None
+    investigation_report: SavedInvestigationReport | None = None
     evidence_ids: list[str]
     limitations: list[str]
 
@@ -88,7 +99,7 @@ class InvestigationEvent(BaseModel):
     cursor: int
     investigation_id: str
     seq: int
-    type: Literal["investigation.started", "tool.started", "observation.recorded", "tool.failed", "investigation.finished"]
+    type: Literal["investigation.started", "tool.started", "observation.recorded", "tool.failed", "report.submitted", "investigation.finished"]
     at: str
     payload: dict[str, Any]
 
@@ -115,9 +126,33 @@ class InvestigationEventList(BaseModel):
     next_after: int | None
 
 
+class InvestigationSnapshot(BaseModel):
+    evidence_id: str
+    snapshot: dict[str, Any]
+
+
+class InvestigationSnapshots(BaseModel):
+    investigation_id: str
+    snapshots: list[InvestigationSnapshot]
+
+
 class InvestigationContext(BaseModel):
     complete: bool
     context: dict[str, Any]
+
+
+class InvestigationExport(BaseModel):
+    schema_version: Literal["nightwatch.investigation-export.v1"]
+    exported_at: str
+    complete: bool
+    session: dict[str, Any]
+    session_start: InvestigationEvent | None
+    session_end: InvestigationEvent | None
+    report: InvestigationReport | None
+    context: InvestigationContext
+    events: list[InvestigationEvent]
+    evidence: list[dict[str, Any]]
+    usage: dict[str, Any]
 
 
 def _timestamp() -> str:
@@ -158,6 +193,10 @@ class InvestigationManager:
         self._stopping = False
         self._started = False
         self._clients: list[Any] = []
+        self._detector = GraphDetector()
+        # Operator-selected previews/history and mock UI mode are never inputs
+        # to automatic model calls. Manual investigation behavior is unchanged.
+        self._detection_enabled = not urlsplit(self.graph_url).query and os.getenv("NIGHTWATCH_MOCK_DATA") != "1"
 
     def _default_model(self):
         from openai import AsyncOpenAI
@@ -170,7 +209,7 @@ class InvestigationManager:
         base_url = endpoint.removesuffix("/").removesuffix("/responses")
         client = AsyncOpenAI(api_key=key, base_url=base_url, max_retries=2, timeout=60)
         self._clients.append(client)
-        return OpenAIResponsesModel(os.environ.get("NIGHTWATCH_LLM_MODEL", "gpt-5.6-luna"),
+        return OpenAIResponsesModel(os.environ.get("NIGHTWATCH_LLM_MODEL", "gpt-6-astra"),
                                     provider=OpenAIProvider(openai_client=client))
 
     async def start(self) -> None:
@@ -221,6 +260,50 @@ class InvestigationManager:
             self.graph_error = None
         except Exception as error:
             self.graph_error = safe_error(error)
+            self._detector.reset()
+            return
+        if self._detection_enabled and not self._stopping:
+            try:
+                await self._detect_graph()
+            except Exception:
+                self._detector.reset()
+                LOG.exception("Automatic investigation detection failed; retrying next graph refresh")
+
+    async def _detect_graph(self) -> None:
+        detection = self.store.current_detection(self.graph_url)
+        fresh, payload, recovered = self._detector.observe(
+            self.graph, detection["payload"]["node_ids"] if detection else None)
+        if not fresh:
+            return
+        if detection is not None:
+            if recovered and self.store.state_base()["active_investigation_id"] is None:
+                self.store.release_detection(detection["request_id"])
+                self._detector.reset()
+                LOG.info("Automatic investigation rearmed after three healthy snapshots: %s", detection["request_id"])
+                return
+            if detection["investigation_id"] is not None:
+                return
+            # A detection waiting behind a manual investigation, or interrupted
+            # before admission, must still be abnormal in the current graph.
+            if not any(node["id"] in detection["payload"]["node_ids"] and
+                       node["status"] in {"warning", "failing"} for node in self.graph["nodes"]):
+                return
+        elif payload is not None:
+            request_id = "detector-" + uuid4().hex
+            self.store.latch_detection(self.graph_url, request_id, payload)
+            detection = {"request_id": request_id, "payload": payload}
+            self._detector.reset()
+            LOG.info("Automatic investigation latched: %s; %s", request_id, payload["reason"])
+        else:
+            return
+        trigger = {"source": "detector", "reason": detection["payload"]["reason"]}
+        body = {"request_id": detection["request_id"], "trigger": trigger}
+        try:
+            await self.create(detection["request_id"], body, trigger)
+        except InvestigationAPIError as error:
+            if error.body["error"]["code"] != "investigation_active":
+                raise
+            # The durable latch remains pending; no second queue/worker exists.
 
     def state(self) -> Json:
         base = self.store.state_base()
@@ -251,6 +334,19 @@ class InvestigationManager:
         try:
             data = self.graph_factory()
             await data.prepare()
+            detection = self.store.detection_context(investigation_id)
+            if detection is not None:
+                data.opening = copy.deepcopy(data.opening)
+                data.opening["trigger"] = {"source": "detector", "reason": detection["reason"]}
+                data.opening["detection"] = detection
+                data.opening["data_scope"] = data.opening["data_scope"].replace(
+                    "No incident has been detected by this runner. ",
+                    "The backend detected repeated abnormal monitor status; detection is a symptom, not a root-cause conclusion. ")
+                data.opening["task"] = (
+                    "Investigate the supplied detection and its saved snapshot. Compare current and retained "
+                    "snapshots around detected_at, prioritizing node_ids. The supplied detection is context, "
+                    "not a tool evidence ID; obtain tool evidence before citing conclusions. Explain observed "
+                    "changes, hypotheses, counterevidence, limitations and the next evidence needed.")
             model = self.model_factory()
             if inspect.isawaitable(model):
                 model = await model
@@ -274,10 +370,10 @@ class InvestigationManager:
             if context is not None:
                 context["messages"] = context.get("messages", [])
             limitations = []
-            if result.status == "unresolved":
-                limitations.append("目前只提供 graph snapshot，沒有 history、logs、traces 或 runtime 資料。")
+            if result.report is None:
+                limitations.append("模型未提交有效的結構化調查報告；原因與已取得證據仍保存。")
             if data.opening.get("mode") == "graph_api":
-                limitations.append("觀測來源是目前設定的 graph API；demo snapshot 不代表即時服務健康。")
+                limitations.append("觀測來源是設定的 Guard Room API；alive 表示窗口內有事件，不等同服務探活。資料是否新鮮依快照時間及來源欄位判讀。")
             self.store.finish(investigation_id, "completed", result.status, result.reason, result.report,
                               evidence, usage, context, limitations, True)
         except asyncio.CancelledError:
@@ -385,6 +481,18 @@ def install_investigations(app, *, model_factory: Callable[[], Any] | None = Non
             raise InvestigationAPIError(404, "not_found", "找不到這件調查")
         return JSONResponse(value, headers=headers)
 
+    async def report(request: Request):
+        response = await detail(request)
+        value = json.loads(response.body)
+        if value["report"] is None:
+            raise InvestigationAPIError(409, "investigation_active", "調查尚未結束，報告尚未產生")
+        return JSONResponse(value["report"], headers=headers)
+
+    async def snapshots(request: Request):
+        response = await detail(request)
+        value = json.loads(response.body)
+        return JSONResponse({"investigation_id": value["id"], "snapshots": saved_snapshots(value)}, headers=headers)
+
     async def events(request: Request):
         query = _query(request, {"after", "limit"})
         if not request.path_params["id"].strip():
@@ -401,6 +509,16 @@ def install_investigations(app, *, model_factory: Callable[[], Any] | None = Non
         if not request.path_params["id"].strip():
             raise InvestigationAPIError(400, "invalid_request", "id 不可為空")
         value = manager.store.context(request.path_params["id"])
+        if value is None:
+            raise InvestigationAPIError(404, "not_found", "找不到這件調查")
+        return JSONResponse(value, headers=headers)
+
+    async def export(request: Request):
+        _query(request, set())
+        identifier = request.path_params["id"]
+        if not identifier.strip():
+            raise InvestigationAPIError(400, "invalid_request", "id 不可為空")
+        value = manager.store.export(identifier)
         if value is None:
             raise InvestigationAPIError(404, "not_found", "找不到這件調查")
         return JSONResponse(value, headers=headers)
@@ -476,6 +594,16 @@ def install_investigations(app, *, model_factory: Callable[[], Any] | None = Non
                       tags=["Investigations"], summary="List persisted investigation events")
     app.add_api_route("/api/investigations/{id}/context", context, methods=["GET"], response_model=InvestigationContext,
                       tags=["Investigations"], summary="Get the saved model context")
+
+    app.add_api_route("/api/investigations/{id}/report", report, methods=["GET"], response_model=InvestigationReport,
+                      tags=["Investigations"], summary="Read the saved terminal investigation report",
+                      responses={404: {"description": "Unknown investigation"}, 409: {"description": "Investigation still running"}})
+    app.add_api_route("/api/investigations/{id}/snapshots", snapshots, methods=["GET"], response_model=InvestigationSnapshots,
+                      tags=["Investigations"], summary="Read exact graph snapshots retained as investigation evidence")
+
+    app.add_api_route("/api/investigations/{id}/export", export, methods=["GET"], response_model=InvestigationExport,
+                      tags=["Investigations"], summary="Export session, report, transcript, events, evidence and usage",
+                      description="Returns saved data only. Running or interrupted sessions are marked incomplete; does not invoke the model or refresh observations.")
 
     @app.exception_handler(InvestigationAPIError)
     async def investigation_error(request: Request, error: APIError):

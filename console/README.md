@@ -1,4 +1,6 @@
-# NightWatch 前端：服務拓樸與事故列表
+# NightWatch 前端：服務拓樸與調查工作台
+
+即時頁面現在使用 `/api/investigations/state` 與 `/api/investigations/stream`，支援開始調查、工具配對、歷史報告及保存上下文。Monitor log 獨立訂閱 `/events`。接線、實機驗收與目前未驗證項目見 [Guard Room／調查 API 接線文件](GUARDROOM-INTEGRATION.md)。下方舊事故契約說明只適用錄影及明確的本機 mock。
 
 原始碼在 `src/`，以原生瀏覽器 ES modules、CSS、SVG 實作。Python 標準函式庫將原始碼與契約錄影複製成可部署的 `dist/`，沒有第三方套件、CDN 或執行期建置依賴。`dist/` 是 Git 忽略的產物；請勿直接修改其中的檔案。
 
@@ -8,16 +10,20 @@
 
 ```sh
 python3 console/build.py
-python3 console/serve.py --port 4173 --control-port 3300
+python3 -B console/serve.py --port 4173 --control-url http://127.0.0.1:8001
 ```
 
 - 事故錄影：<http://127.0.0.1:4173/?source=recording#topology>
 - 即時 API：<http://127.0.0.1:4173/?source=live#topology>
-- 事故列表：將 hash 改為 `#incidents`，或使用頁面上方導覽。
+- 即時調查歷史：將 hash 改為 `#investigations`；錄影事故列表沿用 `#incidents`。
 
-`serve.py` 只綁定 `127.0.0.1`，提供靜態產物，並把 `/api/*` 與 `/events` 的 GET 請求代理到同機的 control 埠；不代理寫入請求。正式部署可直接將 `dist/` 交由 control 或其他同源靜態伺服器提供。結束時按 Ctrl+C。
+`serve.py` 只綁定 `127.0.0.1`，提供靜態產物，並代理 `/api/*` 與 `/events` 的 GET，以及唯一的寫入入口 `POST /api/investigations`。SSE 逐段 flush，不緩衝整條串流；正式反向代理也需關閉 buffering。結束時按 Ctrl+C。
 
 ## 功能與資料契約
+
+### Guard Room 即時拓樸接線
+
+請先看 [Guard Room 接線與後端交接清單](GUARDROOM-INTEGRATION.md)。即時圖取 investigation state 的 `graph` 與 investigation stream 的 `graph`，不依賴舊 `/api/state`。新 API 未提供 layout，按節點 ID 穩定排列；健康與量測原樣呈現。尚未完成真實後端端到端驗證。
 
 ### 本機模擬與部署接線
 
@@ -37,16 +43,18 @@ python3 -B console/serve.py --port 4174 --mock
 接真實後端時先停止模擬服務，再執行：
 
 ```sh
-python3 -B console/serve.py --port 4174 --control-url http://127.0.0.1:3300
+python3 -B console/serve.py --port 4174 --control-url http://127.0.0.1:8001
 ```
 
 亦可設定 `NIGHTWATCH_CONTROL_URL`；命令列 `--control-url` 優先。舊的 `--control-port` 仍可用，未指定 URL 時才生效。網址可用 HTTP(S) 與路徑前綴，不接受網址內帳密、query 或 fragment。填入的是**前端伺服器可達的 control base URL**，不是購物網站首頁，也不是完整 `/api/state` URL。
 
-瀏覽器固定使用同源 `/api/*` 與 `/events`，由 `serve.py` 代理唯讀 GET，不轉送登入 Cookie 或 Authorization。伺服器只綁 `127.0.0.1`；對外部署請使用現有反向代理，`/events` 必須關閉 buffering 並允許長連線。此版本沒有新增認證、公開監聽或遠端設定 API。`/__console/config` 僅提供目前接線資訊，是 console 自己的端點，不屬於 control 契約。
+瀏覽器固定使用同源 API，由 `serve.py` 代理 GET 及建立調查 POST，不轉送登入 Cookie 或 Authorization。伺服器只綁 `127.0.0.1`；對外部署請使用現有反向代理，`/events` 與 `/api/investigations/stream` 必須關閉 buffering 並允許長連線。`/__console/config` 僅提供目前接線資訊，是 console 自己的端點。
 
 `--mock` 是明確開關，不會因真實後端連不上而自動退回假資料。若同時設定 URL 與 `--mock`，會拒絕啟動；使用 mock 前請取消 `NIGHTWATCH_CONTROL_URL`。正式靜態產物仍是 `console/dist/`，建置現在包含 `connect.js`。
 
 本次已建置並在 Chrome 開啟模擬頁，看到 13 節點、catalog 警告與模擬即時連線。其餘情境切換與接線按鈕交由使用者自行操作；真實 shop、遠端 HTTP(S) 代理與部署反向代理尚未驗證。
+
+以下為舊錄影／本機 mock 的行為，即時調查 API 以本頁開頭連結的接線文件為準。
 
 - 拓樸讀取 `GET /api/state` 的 `capabilities.nodes[].layout` 與 `graph_now`，節點數量與 ID 不寫死；只繪製資料中的實際連線。搜尋與健康篩選將無關節點變淡，不自行隱藏或重排其他服務。
 - 健康使用 `status`，Agent 判定使用 `assessment`，節點主要量測取 `primary_axis`。點節點可查看五軸量測、後端趨勢與相鄰連線。缺量測顯示「—」，`observed:false` 連線使用虛線，不表示斷線。
