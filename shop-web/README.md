@@ -84,6 +84,18 @@ make clean CONFIRM=yes         # 會刪除所有資料與 logs volumes
 - `database_write_lock`：只鎖訂單資料庫寫入；其他訂單寫入最多等 10 秒後回傳 500，catalog/cart 維持可用。
 - `checkout_delay`：order checkout 等待 10 秒；不會自動建立訂單。
 
+## 觀測流量
+
+Compose 會啟動 `traffic` 背景服務，預設每 10 秒經由 gateway 執行商品查詢、建立與操作匿名購物車；每輪有 20% 機率執行 checkout。這些請求會經過 catalog、cart 與 order，讓服務關聯圖在沒有瀏覽器操作時仍有資料。服務只使用標準庫與 Compose 內部網路，不會對外連線。
+
+可用環境變數調整行為：
+
+```sh
+TRAFFIC_INTERVAL_SECONDS=10
+TRAFFIC_CHECKOUT_PROBABILITY=0.2
+TRAFFIC_REQUEST_TIMEOUT_SECONDS=12
+```
+
 事件頁使用 `GET/POST/DELETE /api/demo-faults`，一次只允許一張卡；故障會持續啟用，只有 DELETE 手動解除。頁面約每 2 秒輪詢 server 狀態，操作期間防止重送；離開頁面會停止輪詢。控制 API 經 gateway 轉送到 order，order 停止時會如實顯示 API 錯誤。
 
 ## API、logging 與 uv
@@ -92,7 +104,7 @@ make clean CONFIRM=yes         # 會刪除所有資料與 logs volumes
 - Compose API port：gateway `8000`；catalog/cart/order 只在內部使用 `8000`。
 - 各服務的 logger 名稱為 `shop`，預設 `LOG_LEVEL=INFO`、`LOG_DIR=/logs`；每個服務把 UTF-8 log 寫到自己的 `/logs/app.log` 並輸出 stdout。
 - log 格式包含 UTC ISO-8601 毫秒時間、level、logger name、訊息；HTTP log 只記 method/path/status/duration，不記 query 或 request body。`app.log` 於 UTC 每日午夜輪替並保留 7 份。
-- 查閱所有服務：`docker-compose -p nightwatch-shop-web -f compose.yaml logs --tail=100 backend catalog cart order frontend`。
+- 查閱所有服務：`docker-compose -p nightwatch-shop-web -f compose.yaml logs --tail=100 backend catalog cart order frontend traffic`。
 - 查閱 named volumes：`docker volume ls --filter name=nightwatch-shop-web`；不要在 migration 前刪除 `nightwatch-shop-web_shop-data`。
 
 Backend 使用 Python 3.12。`backend/pyproject.toml` 宣告直接依賴，`backend/uv.lock` 固定完整依賴，Docker 使用 `uv sync --frozen --no-dev --no-cache`；`backend/requirements.txt` 保留作 pip fallback，更新依賴後在 `backend/` 執行：
