@@ -119,6 +119,12 @@ Use actual model/reason/error text for summary, never fault-card truth. For grap
 mode disclose the synthetic source and lack of history/log/trace data. For failures
 retain any already-recorded evidence. Do not return secrets or provider auth objects.
 
+The persisted context object uses stable keys: `instructions` (string, or null if
+preparation failed), `tools` (name/description/parameters array), `opening` (object),
+`model` (`{name, settings}` without authentication), and `messages` (serialized
+framework messages array). Defaults before preparation are empty values, not
+invented model input. The API's outer `complete` flag describes transcript completeness.
+
 ## HTTP API
 
 All new endpoints work independently of NIGHTWATCH_MOCK_DATA. API error envelope:
