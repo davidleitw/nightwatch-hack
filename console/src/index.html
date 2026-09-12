@@ -32,6 +32,16 @@
     <div class="investigation-layout"><section class="panel topology-panel"><div class="panel-header"><div><h2>服務關聯圖</h2><span id="graph-count">等待資料</span></div><div class="graph-controls"><label class="sr-only" for="node-search">搜尋服務</label><input id="node-search" type="search" placeholder="搜尋服務名稱…"><label class="sr-only" for="health-filter">節點健康篩選</label><select id="health-filter"><option value="all">全部健康狀態</option><option value="failing">異常</option><option value="warning">警告</option><option value="ok">正常</option><option value="unknown">無資料</option></select><button id="zoom-out" aria-label="縮小拓樸">−</button><span id="zoom-value">100%</span><button id="zoom-in" aria-label="放大拓樸">＋</button><button id="fit">符合視窗</button></div></div>
     <div class="legend"><span><i class="dot ok"></i>正常</span><span><i class="dot warning"></i>警告</span><span><i class="dot failing"></i>異常</span><span><i class="dot unknown"></i>無資料</span><span class="assessment-legend">藍框：懷疑　 紅框＋標籤：根因　 斜線：已排除</span></div>
     <div id="graph-viewport" tabindex="0" aria-label="服務拓樸，內容較寬時可水平捲動"><div id="graph-canvas"><svg id="edges" aria-label="服務連線"></svg><div id="nodes"></div></div><div id="graph-empty" class="empty">正在讀取服務拓樸…</div></div><div class="graph-caption"><span id="match-count"></span><span>箭頭依契約方向；虛線表示近期未觀測到流量，並不代表斷線。</span></div>
+    <section id="graph-timeline" class="graph-timeline" aria-label="歷史服務快照" hidden>
+      <div class="timeline-heading"><strong id="graph-mode">即時 graph</strong><button id="graph-live" type="button" disabled>回到即時</button></div>
+      <p id="graph-view-time" role="status">等待快照</p>
+      <div class="timeline-controls"><button id="snapshot-prev" type="button" disabled>上一張</button><label for="snapshot-range">歷史快照</label><output id="snapshot-target" for="snapshot-range">讀取中…</output><button id="snapshot-next" type="button" disabled>下一張</button></div>
+      <input id="snapshot-range" type="range" min="0" max="1" value="1" step="1" disabled aria-describedby="snapshot-note">
+      <div id="snapshot-ticks" class="snapshot-ticks" aria-hidden="true"></div>
+      <div class="timeline-bounds"><span id="snapshot-from">—</span><span id="snapshot-to">—</span></div>
+      <p id="snapshot-note" role="status">正在讀取可用歷史。</p>
+      <p id="snapshot-error" class="failing" role="alert" hidden></p>
+    </section>
     <div id="node-detail" aria-live="polite"><div class="empty">點選節點查看量測與相鄰連線。</div></div><div id="sources" class="sources"></div></section>
     <aside class="panel investigation-panel" aria-label="事故調查">
       <div class="investigation-heading"><h2>事故調查</h2><span id="investigation-phase"></span></div>

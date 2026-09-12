@@ -39,6 +39,9 @@ export function validateInvestigationEvent(value) {
 }
 export async function requestJSON(path, options = {}) {
   const controller = new AbortController();
+  const cancel = () => controller.abort();
+  if (options.signal?.aborted) cancel();
+  options.signal?.addEventListener('abort', cancel, {once: true});
   const timer = setTimeout(() => controller.abort(), 10000);
   try {
     const response = await fetch(path, {cache: 'no-store', ...options, signal: controller.signal,
@@ -47,14 +50,15 @@ export async function requestJSON(path, options = {}) {
     let value;
     try { value = JSON.parse(text); } catch { throw new Error(`${path} 回傳非 JSON（HTTP ${response.status}）。`); }
     if (!response.ok) {
-      const error = new Error(`${value.error?.code || 'http_error'}：${value.error?.message_zh || `HTTP ${response.status}`}`);
+      const error = new Error(`${value.error?.code || value.detail?.code || 'http_error'}：${value.error?.message_zh || `HTTP ${response.status}`}`);
       error.status = response.status; error.details = value.error?.details; throw error;
     }
     return value;
   } catch (error) {
+    if (options.signal?.aborted) throw error;
     if (error.name === 'AbortError') throw new Error(`${path} 超過 10 秒未回應。`);
     throw error;
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer); options.signal?.removeEventListener('abort', cancel); }
 }
 
 export class InvestigationStore {

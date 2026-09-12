@@ -21,6 +21,19 @@ python3 -B console/serve.py --port 4173 --control-url http://127.0.0.1:8001
 
 ## 功能與資料契約
 
+### 歷史 graph 時間軸
+
+即時工作台的服務圖下方提供歷史滑桿、上一張／下一張與「回到即時」。拖曳僅切換服務圖、節點詳情與量測來源；右側調查與 Monitor 紀錄維持目前狀態，不會啟動調查。歷史模式的開始按鈕標為「調查即時狀態」，不表示後端可以重新調查歷史時間。
+
+- 使用 Guard Room 現行 `GET /api/graph/snapshots?limit=500`，依 `next_before_seq` 透過 `before_seq` 讀取後續頁；每 5 秒更新可用清單。實際範圍由清單決定，不寫死保留時間。
+- `GET /api/graph?timestamp=<at>` 取得完整歷史 graph。使用 `URLSearchParams` 編碼時區加號；同時間只提供後端可查得的最大 seq。索引 seq 不必連續。
+- 時間軸依時間比例顯示，取不晚於游標的快照；游標與實際圖的時間分開標示，均為台灣時間。快照間不插值，刻度只代表保存時間，不代表健康。
+- 歷史模式固定時間軸範圍，背景持續接收即時 graph，按「回到即時」才切換。已過期快照會清除並提示；404、連線及格式錯誤可見，不退回錄影或假資料。
+- 拖曳請求約每 150ms 最多一次，放開後完成最後選擇；取消過時請求並拒收與選取不一致的回應。載入期間清空舊圖，避免把舊量測標為新時間。沒有跨快照快取，每次切換向後端確認保留資料。
+- 同一頁生命週期內，既有節點保留位置，新出現的節點接在後面；移除的節點不補造，只留下空位。支援方向鍵逐張操作。
+
+這套操作只在真實 API 工作台啟用，錄影與明確 mock 沿用原操作。Guard Room 介面依使用者核准的歷史 graph 草稿接線；`contracts/API.md` 舊版 `?at=`／`not_found` 與現行 `?timestamp=`／`snapshot_not_found` 的差異仍待契約同步。
+
 ### Guard Room 即時拓樸接線
 
 請先看 [Guard Room 接線與後端交接清單](GUARDROOM-INTEGRATION.md)。即時圖取 investigation state 的 `graph` 與 investigation stream 的 `graph`，不依賴舊 `/api/state`。新 API 未提供 layout，按節點 ID 穩定排列；健康與量測原樣呈現。尚未完成真實後端端到端驗證。
