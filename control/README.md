@@ -4,15 +4,15 @@
 再決定下一個查詢，最後交出符合 `contracts/schemas/agent-report.schema.json` 的 JSON。
 PydanticAI 管理對話與 function-call 往返；本專案只處理 NightWatch 的規則。
 
-假設：依本次需求採 Python 與現成 framework，取代舊 `BRIEF.md` 的 Go 技術選擇；
-工作位置為 `nightwatch-hack/control/`。這不是整個 control 服務，也不是 tasks/06 的完整驗收。
+假設：依本次需求採 Python 與現成 framework，取代舊 [BRIEF.md](../archive/legacy-hackathon/control/BRIEF.md) 的 Go 技術選擇；
+工作位置為 `nightwatch-hack/control/`。這不是整個 control 服務，也不是[舊任務 06](../archive/legacy-hackathon/control/tasks/06-agent.md) 的完整驗收。
 
 ## 目錄與資料來源
 
 | 位置 | 責任 |
 | --- | --- |
-| `../shop/` | 店面與故障注入介面，由另一個部份負責 |
-| `../console/` | 前端，由另一個部份負責 |
+| `../shop-web/` | 現有購物網站；尚未接入本 loop 的 live 工具 |
+| `../archive/legacy-hackathon/shop/`、`../archive/legacy-hackathon/console/` | 舊店面、故障注入介面與前端的任務規劃，已封存 |
 | `../contracts/` | 唯讀的 API、工具、報告與事故錄影 |
 | `nightwatch_agent/loop.py` | framework 接線、工具驗證、證據、預算與報告檢查 |
 | `nightwatch_agent/replay.py` | 讀取既有事故錄影；未錄下的查詢明確失敗 |
