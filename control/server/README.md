@@ -2,6 +2,10 @@
 
 獨立的 uv 專案，需要 Python 3.11 以上。
 
+其他前端 API 已掛到同一個 app，清單與操作範例見
+[前端 API 文件](../FRONTEND-API.md)。新增介面的假資料預設關閉，
+以環境 flag `NIGHTWATCH_MOCK_DATA=1` 啟用；既有 graph dummy 不受此 flag 影響。
+
 一鍵背景啟動／重啟：從 repo 根目錄執行 `./guardroom/restart.sh`（預設 port 8001），
 詳細說明見 [guardroom README](../../guardroom/README.md)。以下為手動開發啟動方式。
 

@@ -1,5 +1,9 @@
 # Python agent loop
 
+前端 HTTP／SSE 介面已整合至 `server/` 的 Guard Room FastAPI app，完整清單見
+[FRONTEND-API.md](FRONTEND-API.md)。新增介面以 `NIGHTWATCH_MOCK_DATA=1` 啟用模擬資料，
+預設關閉，不執行本頁的 agent loop。
+
 本輪負責最小調查 loop，使用 **PydanticAI 2.43**。模型可以選工具、讀取帶編號的證據，
 再決定下一個查詢，最後交出符合 `contracts/schemas/agent-report.schema.json` 的 JSON。
 PydanticAI 管理對話與 function-call 往返；本專案只處理 NightWatch 的規則。
