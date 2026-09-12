@@ -1,0 +1,4 @@
+interface:
+  display_name: "Commit Agent"
+  short_description: "Create a Conventional Commit from current changes"
+  default_prompt: "Review the current modifications and create an appropriate Conventional Commit."
