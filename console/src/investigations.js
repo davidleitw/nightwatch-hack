@@ -1,5 +1,5 @@
 import {readUsage} from './data.js';
-import {InvestigationStore, pairedActivity, requestJSON, validateSummary, validateObservation, graphLayout} from './investigation-data.js';
+import {InvestigationStore, pairedActivity, requestJSON, validateSummary, validateObservation, graphLayout, focusedGraph, retainLog} from './investigation-data.js';
 
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
@@ -36,12 +36,12 @@ let graph = null, graphReceivedAt = null, selectedNode = null, zoom = 1, fit = t
 let stream = null, logStream = null, streamRetry = null, logRetry = null, heartbeatTimer = null, streamDelay = 1000, logDelay = 1000;
 let lastActivity = 0, lastLogActivity = 0, disposed = false, graphGeneration = 0;
 let history = [], nextBefore = null, historyBusy = false, historyAgain = false, selectedHistory = null, detailGeneration = 0, filter = 'all';
+let showAllNodes = false, journalTimer = null, renderedNodesKey = '', renderedNodeId = null, renderedEdges = '';
 let selectedDetailTab = 'report', lastChatId = null, messageReplay = true;
 let journalFilter = 'all', posting = false, pendingRequest = null, refreshBusy = false;
 const storageKey = 'nightwatch.investigation.pending.v1';
 
 const localTime = value => Number.isFinite(typeof value === 'number' ? value : Date.parse(value)) ? new Intl.DateTimeFormat('zh-TW', {timeZone: 'Asia/Taipei', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'}).format(new Date(value)) : '—';
-const nodeSlots = new Map();
 let liveGraph = null, liveReceivedAt = null, viewingHistory = false;
 let snapshots = [], timelineBounds = null, cursorTime = null, targetSnapshot = null;
 let snapshotBusy = false, snapshotMessage = '', snapshotIndexError = '', snapshotIndexBusy = false;
@@ -207,6 +207,7 @@ function returnToLive() {
 }
 
 function error(key, message) {
+  if ((errors.get(key) ?? null) === (message || null)) return;
   if (message) errors.set(key, message); else errors.delete(key);
   $('errors').innerHTML = [...errors.values()].map(message => `<div class="error">${esc(message)}</div>`).join('');
 }
@@ -226,9 +227,9 @@ function acceptGraph(value, receivedAt = null) {
   validateObservation(value);
   // Avoid a slow state GET rolling an independently delivered graph backwards.
   if (liveGraph && Date.parse(value.at) < Date.parse(liveGraph.at)) return;
-  if (liveGraph && value.at === liveGraph.at && value.seq < liveGraph.seq) return;
+  if (liveGraph && value.at === liveGraph.at && value.seq <= liveGraph.seq) return;
   liveGraph = value; liveReceivedAt = receivedAt; graphGeneration++;
-  if (!viewingHistory) { graph = value; graphReceivedAt = receivedAt; renderGraph(); }
+  if (!viewingHistory) { graph = value; graphReceivedAt = receivedAt; if (!$('topology-view').hidden) renderGraph(); }
 }
 function acceptState(value, options = {}) {
   const previous = activeId(), previousUsage = usageId();
@@ -249,12 +250,31 @@ function acceptState(value, options = {}) {
   renderUsagePage();
 }
 
+const nodeNames = {
+  'shop-products': '商品瀏覽', 'shop-cart-read': '購物車讀取', 'shop-cart-mutate': '購物車更新',
+  'shop-checkout-request': '結帳入口', 'shop-checkout-logic': '結帳處理', 'shop-db-write': '訂單寫入',
+  'shop-health': '健康檢查', 'shop-db': '資料庫', 'shop-catalog-read': '商品目錄讀取',
+  'shop-catalog-lookup': '商品查詢', 'shop-cart-catalog-lookup': '購物車商品查詢',
+  'shop-cart-prepare': '購物車準備', 'shop-cart-complete': '購物車完成', 'shop-cart-abort': '購物車取消',
+  'shop-order-cart-prepare': '訂單準備購物車', 'shop-order-catalog-lookup': '訂單商品查詢',
+  'shop-order-cart-complete': '訂單完成購物車', 'shop-order-cart-abort': '訂單取消購物車',
+};
+const nodeName = id => nodeNames[id] || id;
+function nodeIcon(kind) {
+  const paths = kind === 'datastore' || kind === 'volume'
+    ? '<ellipse cx="12" cy="5" rx="7" ry="3"/><path d="M5 5v14c0 4 14 4 14 0V5M5 12c0 4 14 4 14 0"/>'
+    : kind === 'queue' ? '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M7 9h10M7 13h7"/>'
+    : '<rect x="4" y="3" width="16" height="7" rx="2"/><rect x="4" y="14" width="16" height="7" rx="2"/><path d="M8 6.5h.01M8 17.5h.01M12 6.5h4M12 17.5h4"/>';
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+}
+
 function renderGraph() {
   renderTimeline();
   $('graph-canvas').hidden = !graph;
   $('active-phase').textContent = activeId() ? '調查中' : store.state ? '無進行中調查' : '等待狀態';
   if (!graph) {
     $('graph-empty').hidden = false; $('graph-empty').textContent = snapshotBusy ? '正在讀取歷史快照…' : '尚無可顯示的服務拓樸，請查看快照與連線訊息。';
+    renderedNodesKey = ''; renderedEdges = '';
     $('nodes').textContent = ''; $('edges').innerHTML = ''; $('sources').textContent = '';
     for (const id of ['total-nodes', 'failing-count', 'warning-count', 'snapshot-at']) $(id).textContent = '—';
     $('graph-count').textContent = snapshotBusy ? '載入中' : '沒有快照'; $('match-count').textContent = '';
@@ -262,52 +282,94 @@ function renderGraph() {
     renderNode();
     return;
   }
-  if (!graph.nodes.some(n => n.id === selectedNode)) selectedNode = graph.nodes[0]?.id ?? null;
-  for (const node of graphLayout(graph)) if (!nodeSlots.has(node.id)) nodeSlots.set(node.id, nodeSlots.size);
-  const layout = graph.nodes.map(node => { const slot = nodeSlots.get(node.id); return {id: node.id, layout: {row: Math.floor(slot / 4), col: slot % 4}}; });
-  const signature = String(nodeSlots.size);
+  if (!graph.nodes.some(n => n.id === selectedNode)) selectedNode = graph.nodes.find(n => n.id === 'shop-checkout-request')?.id ?? graph.nodes[0]?.id ?? null;
+  const view = focusedGraph(graph, {all: showAllNodes, search: $('node-search').value, selected: selectedNode});
+  $('graph-viewport').classList.add('topology-modern');
+  const layout = graphLayout(view), signature = JSON.stringify(layout);
   if (signature !== layoutSignature) { layoutSignature = signature; fit = true; }
-  const width = Math.min(4, Math.max(1, nodeSlots.size)) * 160 + 24;
-  const height = Math.max(1, Math.ceil(nodeSlots.size / 4)) * 150 + 24;
-  if (fit) zoom = Math.max(.5, Math.min(1.15, ($('graph-viewport').clientWidth - 16) / width));
-  const positions = new Map(layout.map(n => [n.id, {x: 20 + n.layout.col * 160, y: 20 + n.layout.row * 150}]));
+  const cardWidth = 204, cardHeight = 144, columnGap = 64, rowStep = 88;
+  const width = Math.max(1, ...layout.map(n => n.layout.col + 1)) * (cardWidth + columnGap) - columnGap + 64;
+  const height = Math.max(0, ...layout.map(n => n.layout.row)) * rowStep + cardHeight + 100;
+  if (fit) zoom = Math.max(.65, Math.min(1, ($('graph-viewport').clientWidth - 24) / width));
+  const positions = new Map(layout.map(n => [n.id, {x: 32 + n.layout.col * (cardWidth + columnGap), y: 64 + n.layout.row * rowStep}]));
   const search = $('node-search').value.toLowerCase().trim(), selectedHealth = $('health-filter').value;
-  const matches = new Set(graph.nodes.filter(n => (!search || n.id.toLowerCase().includes(search)) && (selectedHealth === 'all' || n.status === selectedHealth)).map(n => n.id));
+  const matches = new Set(view.nodes.filter(n => (!search || n.id.toLowerCase().includes(search)) && (selectedHealth === 'all' || n.status === selectedHealth)).map(n => n.id));
   $('total-nodes').textContent = graph.nodes.length;
   $('failing-count').textContent = graph.nodes.filter(n => n.status === 'failing').length;
   $('warning-count').textContent = graph.nodes.filter(n => n.status === 'warning').length;
   $('snapshot-at').textContent = localTime(graph.at);
-  $('graph-count').textContent = `${graph.nodes.length} 個節點 / ${graph.edges.length} 條連線`;
-  $('match-count').textContent = `${matches.size} / ${graph.nodes.length} 個節點符合條件`;
+  $('graph-count').textContent = `顯示 ${view.nodes.length} / ${graph.nodes.length} 個節點 · ${view.edges.length} 條連線`;
+  $('match-count').textContent = `${matches.size} / ${view.nodes.length} 個可見節點符合條件`;
   $('graph-empty').hidden = graph.nodes.length > 0;
   $('graph-empty').textContent = '後端快照目前沒有服務節點。';
   $('graph-canvas').style.width = `${width * zoom}px`; $('graph-canvas').style.height = `${height * zoom}px`;
   for (const id of ['nodes', 'edges']) { $(id).style.width = `${width}px`; $(id).style.height = `${height}px`; $(id).style.transform = `scale(${zoom})`; }
   $('edges').setAttribute('width', width); $('edges').setAttribute('height', height);
   $('zoom-value').textContent = `${Math.round(zoom * 100)}%`;
-  updateGraphMarkup('edges', '<defs><marker id="arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0L7 3.5L0 7" fill="none" stroke="#72856c"/></marker></defs>' + graph.edges.map((e, index) => {
+  const isolated = layout.filter(n => n.layout.isolated);
+  const connected = layout.filter(n => !n.layout.isolated);
+  const captions = `${connected.length ? '<text class="graph-section-label" x="32" y="30">服務呼叫 →</text>' : ''}${isolated.length ? `<text class="graph-section-label" x="32" y="${Math.min(...isolated.map(n => positions.get(n.id).y)) - 24}">其他可見觀測點</text>` : ''}`;
+  const edgesHTML = '<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M1 1L7 4L1 7" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>' + captions + view.edges.map((e, index) => {
     const a = positions.get(e.from), b = positions.get(e.to);
-    const lane = a.y === b.y ? a.y + 122 + index % 3 * 5 : Math.min(a.y, b.y) + 125 + index % 3 * 5;
-    const startY = b.y < a.y ? a.y : a.y + 106;
-    const endY = b.y <= a.y ? b.y + 106 : b.y;
-    const d = a.y === b.y && Math.abs(a.x - b.x) === 160 ? `M${a.x + (a.x < b.x ? 120 : 0)} ${a.y + 53}H${b.x + (a.x < b.x ? 0 : 120)}` : `M${a.x + 60} ${startY}V${lane}H${b.x + 60}V${endY}`;
-    return `<path class="edge ${e.observed ? '' : 'unobserved'} ${e.from === selectedNode || e.to === selectedNode ? 'related' : ''}" d="${d}" marker-end="url(#arrow)"><title>${esc(e.from)} → ${esc(e.to)} · ${esc(e.kind)} · ${e.observed ? '已觀測' : '近期未觀測'}</title></path>`;
-  }).join(''));
-  updateGraphMarkup('nodes', graph.nodes.map(n => {
+    let d;
+    if (b.x > a.x) {
+      const start = a.x + cardWidth, end = b.x - 5, ay = a.y + cardHeight / 2, by = b.y + cardHeight / 2;
+      // Long dependencies travel above the cards rather than through intermediate nodes.
+      if (b.x - a.x > cardWidth + columnGap) {
+        const lane = Math.min(a.y, b.y) - 16 - index % 3 * 6;
+        d = `M${start} ${ay}C${start + 24} ${ay} ${start + 24} ${lane} ${start + 36} ${lane}H${end - 32}C${end - 16} ${lane} ${end - 24} ${by} ${end} ${by}`;
+      } else {
+        const mid = (start + end) / 2;
+        d = `M${start} ${ay}C${mid} ${ay} ${mid} ${by} ${end} ${by}`;
+      }
+    } else {
+      const start = a.x + cardWidth / 2, end = b.x + cardWidth / 2;
+      const lane = Math.max(a.y, b.y) + cardHeight + 18 + index % 3 * 6;
+      d = `M${start} ${a.y + cardHeight}C${start} ${lane} ${end} ${lane} ${end} ${b.y + cardHeight + 5}`;
+    }
+    return `<path class="edge ${e.observed ? '' : 'unobserved'} ${e.from === selectedNode || e.to === selectedNode ? 'related' : ''} ${matches.has(e.from) && matches.has(e.to) ? '' : 'dim'}" d="${d}" marker-end="url(#arrow)"><title>${esc(e.from)} → ${esc(e.to)} · ${esc(e.kind)} · ${e.observed ? '已觀測' : '近期未觀測'}</title></path>`;
+  }).join('');
+  if (edgesHTML !== renderedEdges) { $('edges').innerHTML = edgesHTML; renderedEdges = edgesHTML; }
+  const nodesHTML = view.nodes.map(n => {
     const p = positions.get(n.id);
-    const readings = {traffic: n.traffic, errors: n.errors, latency: n.p95_ms, saturation: n.saturation};
-    const labels = {traffic: '流量', errors: '錯誤率', latency: 'P95', saturation: '飽和度', liveness: '存活訊號'};
-    const preferred = n.kind === 'datastore' ? ['latency', 'traffic', 'errors', 'saturation'] : ['queue', 'volume'].includes(n.kind) ? ['saturation', 'traffic', 'latency', 'errors'] : ['traffic', 'latency', 'errors', 'saturation'];
-    const axis = n.primary_axis ?? preferred.find(key => Number.isFinite(readings[key]));
-    const values = {traffic: number(n.traffic, ' req/s'), errors: number(n.errors, '%', 100), latency: number(n.p95_ms, ' ms'), saturation: number(n.saturation, '%', 100), liveness: n.alive === true ? 'true' : n.alive === false ? 'false' : '—'};
-    const primary = axis ? `${labels[axis]} ${values[axis] === '—' ? '未回報' : values[axis]}` : '尚無量測';
-    return `<button class="graph-node ${esc(n.kind)} ${selectedNode === n.id ? 'selected' : ''} ${matches.has(n.id) ? '' : 'dim'}" data-node="${esc(n.id)}" style="left:${p.x}px;top:${p.y}px" aria-pressed="${selectedNode === n.id}"><span class="node-name">${esc(n.id)}</span><span class="node-meta ${esc(n.status)}"><span><i class="dot ${esc(n.status)}"></i>${esc(health[n.status])}</span><span>觀測</span></span><span class="node-value">${esc(primary)}</span></button>`;
-  }).join(''));
-  $('nodes').querySelectorAll('[data-node]').forEach(button => button.onclick = () => locateNode(button.dataset.node));
-  updateGraphMarkup('sources', '<span>觀測來源</span>' + ['prometheus', 'jaeger', 'logstore'].map(key => {
+    return `<button class="graph-node" data-node="${esc(n.id)}" style="left:${p.x}px;top:${p.y}px" title="${esc(n.id)}" aria-label="選取 ${esc(n.id)}"><span class="node-topline"><span class="node-icon" aria-hidden="true">${nodeIcon(n.kind)}</span><span class="node-meta"></span></span><span class="node-name">${esc(nodeName(n.id))}</span><span class="node-id">${esc(n.id)}</span><span class="node-measure"><span class="node-axis"></span><span class="node-value"></span></span></button>`;
+  }).join('');
+  const nodesKey = JSON.stringify(view.nodes.map(n => n.id));
+  if (nodesKey !== renderedNodesKey) {
+    const template = document.createElement('template'); template.innerHTML = nodesHTML;
+    const existing = new Map([...$('nodes').children].map(node => [node.dataset.node, node]));
+    const visible = new Set(view.nodes.map(node => node.id));
+    for (const [id, node] of existing) if (!visible.has(id)) node.remove();
+    for (const [index, node] of view.nodes.entries()) {
+      const element = existing.get(node.id) ?? template.content.children[index].cloneNode(true);
+      if ($('nodes').children[index] !== element) $('nodes').insertBefore(element, $('nodes').children[index] ?? null);
+    }
+    renderedNodesKey = nodesKey;
+  }
+  {
+    for (const [index, button] of [...$('nodes').children].entries()) {
+      const n = view.nodes[index], p = positions.get(n.id);
+      button.className = `graph-node ${n.kind} health-${n.status} ${selectedNode === n.id ? 'selected' : ''} ${matches.has(n.id) ? '' : 'dim'}`;
+      button.style.left = `${p.x}px`; button.style.top = `${p.y}px`;
+      button.setAttribute('aria-pressed', String(selectedNode === n.id));
+      button.querySelector('.node-meta').className = `node-meta ${n.status}`;
+      button.querySelector('.node-meta').innerHTML = `<i class="dot ${esc(n.status)}"></i>${esc(health[n.status])}`;
+      const readings = {latency: n.p95_ms, traffic: n.traffic, errors: n.errors, saturation: n.saturation};
+      const preferred = ['queue', 'volume'].includes(n.kind) ? ['saturation', 'traffic', 'latency', 'errors'] : ['latency', 'traffic', 'errors', 'saturation'];
+      const axis = n.primary_axis ?? preferred.find(key => Number.isFinite(readings[key]));
+      const values = {traffic: number(n.traffic, ' req/s'), errors: number(n.errors, '%', 100), latency: number(n.p95_ms, ' ms'), saturation: number(n.saturation, '%', 100), liveness: n.alive === true ? '存活' : n.alive === false ? '無回應' : '—'};
+      button.querySelector('.node-axis').textContent = ({traffic: '請求量', errors: '錯誤率', latency: 'P95 延遲', saturation: n.sat_label || '飽和度', liveness: '存活狀態'})[axis] || '主要量測';
+      button.querySelector('.node-value').textContent = values[axis] ?? '—';
+    }
+  }
+  $('nodes').onclick = event => {
+    const button = event.target.closest('[data-node]');
+    if (button) locateNode(button.dataset.node);
+  };
+  $('sources').innerHTML = '<span>觀測來源</span>' + ['prometheus', 'jaeger', 'logstore'].map(key => {
     const s = graph.sources[key];
     return `<span>${key} · ${s?.ok === true ? '可用' : s?.ok === false ? '不可用' : '無資料'} · ${esc(number(s?.age_secs, ' 秒前'))}</span>`;
-  }).join(''));
+  }).join('');
   $('footer-status').textContent = `${snapshotBusy ? '目前顯示' : viewingHistory ? '歷史' : '即時'}快照 #${graph.seq} · 觀測時間 ${localTime(graph.at)} (+08:00)${viewingHistory ? '；右側調查與 Monitor 紀錄仍為即時' : ` · 後端接收 ${at(graphReceivedAt)}；心跳不代表新量測`}`;
   renderNode();
 }
@@ -319,10 +381,20 @@ function locateNode(id) {
 }
 function renderNode() {
   const n = graph?.nodes.find(n => n.id === selectedNode);
-  if (!n) { updateGraphMarkup('node-detail', '<div class="empty">點選節點查看後端量測。</div>'); return; }
+  if (!n) { renderedNodeId = null; $('node-detail').innerHTML = '<div class="empty">點選節點查看後端量測。</div>'; return; }
   const metrics = [['請求量', number(n.traffic, ' req/s')], ['錯誤率', number(n.errors, '%', 100)], ['P95', number(n.p95_ms, ' ms')], ['飽和度', number(n.saturation, '%', 100)], ['alive', n.alive === true ? 'true' : n.alive === false ? 'false' : '—']];
-  updateGraphMarkup('node-detail', `<div class="node-detail-top"><h3>${esc(n.id)}</h3><span class="${esc(n.status)}">${esc(health[n.status])}</span></div><div class="node-metrics">${metrics.map(([label, value]) => `<div><span class="metric-label">${label}</span><strong>${esc(value)}</strong></div>`).join('')}</div><p class="report-note">alive 與來源量測的定義由後端決定；調查結束不會改變服務健康。</p><details><summary>原始節點與相鄰連線</summary>${raw({node: n, edges: graph.edges.filter(e => e.from === n.id || e.to === n.id)})}</details>`);
+  if (renderedNodeId === n.id) {
+    const panel = $('node-detail');
+    const status = panel.querySelector('.node-detail-top > span');
+    status.className = n.status; status.textContent = health[n.status];
+    panel.querySelectorAll('.node-metrics strong').forEach((element, index) => { element.textContent = metrics[index][1]; });
+    panel.querySelector('pre.raw').textContent = JSON.stringify({node: n, edges: graph.edges.filter(e => e.from === n.id || e.to === n.id)}, null, 2);
+    return;
+  }
+  renderedNodeId = n.id;
+  $('node-detail').innerHTML = `<div class="node-detail-top"><h3>${esc(n.id)}</h3><span class="${esc(n.status)}">${esc(health[n.status])}</span></div><div class="node-metrics">${metrics.map(([label, value]) => `<div><span class="metric-label">${label}</span><strong>${esc(value)}</strong></div>`).join('')}</div><p class="report-note">alive 與來源量測的定義由後端決定；調查結束不會改變服務健康。</p><details><summary>原始節點與相鄰連線</summary>${raw({node: n, edges: graph.edges.filter(e => e.from === n.id || e.to === n.id)})}</details>`;
 }
+
 
 function reportCard(id, submitted = null) {
   const detail = details.get(id), saved = detail?.report;
@@ -478,9 +550,22 @@ function renderCurrent() {
   $('investigation-phase').innerHTML = summary ? badge(summary) : '';
   $('investigation-summary').innerHTML = id ? `<span class="chat-session-label">${activeId() ? '<i class="live-dot"></i>目前調查' : icon('history') + '最近一次調查'}</span><span class="chat-session-id" title="${esc(id)}">${esc(id)}</span>` : `<span class="chat-session-label">${store.state ? '開始調查，讓 Agent 蒐集證據並產生報告。' : '等待調查狀態…'}</span>`;
   renderUsage();
+  renderJournal();
+  $('show-report').disabled = !id;
+  $('show-report').onclick = () => { if (id) location.hash = reportHref(id); };
+  $('investigation-report').hidden = true;
+  const latest = store.state?.last_completed_investigation_id;
+  $('current-incident').innerHTML = `<div><h3>${activeId() ? '調查由後端執行，關閉頁面不會取消' : '目前沒有進行中的調查'}</h3><p>調查結論與服務健康分開顯示。</p></div><a href="${latest ? reportHref(latest) : '#investigations'}">${icon(latest ? 'report' : 'history')}${latest ? '查看最近一次報告' : '查看調查歷史'} ${icon('arrow')}</a>`;
+  if (!store.state) $('current-incident').innerHTML = '<div><h3>尚未取得調查狀態</h3><p>請查看上方連線錯誤，恢復後按「更新資料」。</p></div>';
+}
+
+function renderJournal() {
+  if (document.hidden || $('topology-view').hidden || $('journal-panel').hidden) return;
+  const id = currentChatId(), summary = activeSummary() || details.get(id);
+  const terminal = summary ? summary.status !== 'running' : false;
   const items = id && journalFilter !== 'monitor' ? activityItems(id, terminal, journalFilter) : [];
   if (journalFilter === 'all' || journalFilter === 'monitor') {
-    for (const log of logs.values()) items.push({key: `monitor:${log.monitor_id}:${log.event_id}`, at: log.occurred_at, html: `<article class="chat-message monitor-message"><div class="chat-avatar">${icon('pulse')}</div><div class="chat-message-body"><div class="chat-meta"><strong>Monitor</strong><span>${esc(log.level)}</span><time>${esc(shortTime(log.occurred_at))}</time></div><div class="chat-bubble">${esc(log.message)}</div><div class="journal-links">${log.refs.node_ids.map(node => `<button class="node-link" data-locate-node="${esc(node)}">${esc(node)} ↗</button>`).join('')}</div><details data-preserve="log:${esc(log.monitor_id)}:${esc(log.event_id)}"><summary>原始 log · ${esc(log.monitor_id)}</summary>${raw(log)}</details></div></article>`});
+    for (const log of [...logs.values()].slice(-50)) items.push({key: `monitor:${log.monitor_id}:${log.event_id}`, at: log.occurred_at, html: `<article class="chat-message monitor-message"><div class="chat-avatar">${icon('pulse')}</div><div class="chat-message-body"><div class="chat-meta"><strong>Monitor</strong><span>${esc(log.level)}</span><time>${esc(shortTime(log.occurred_at))}</time></div><div class="chat-bubble">${esc(log.message)}</div><div class="journal-links">${log.refs.node_ids.map(node => `<button class="node-link" data-locate-node="${esc(node)}">${esc(node)} ↗</button>`).join('')}</div><details data-preserve="log:${esc(log.monitor_id)}:${esc(log.event_id)}"><summary>原始 log · ${esc(log.monitor_id)}</summary>${raw(log)}</details></div></article>`});
     // Merge monitor observations by timestamp without changing investigation seq order.
     const monitorItems = items.filter(item => item.key.startsWith('monitor:')).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
     const agentItems = items.filter(item => !item.key.startsWith('monitor:'));
@@ -494,13 +579,11 @@ function renderCurrent() {
   updateChat($('journal-entries'), items, true);
   if (changedId) { $('journal-panel').scrollTop = $('journal-panel').scrollHeight; $('chat-latest').hidden = true; }
   $('journal-count').textContent = `${id ? store.activity(id).length : 0} 個事件 · ${logs.size} 筆 log`;
-  $('journal-note').textContent = messageReplay ? '文字與推理摘要依模型實際回覆呈現；工具結果可展開。Monitor 斷線不補送。' : '此來源僅提供工具紀錄，未提供 Agent 文字回放。Monitor 斷線不補送。';
-  $('show-report').disabled = !id;
-  $('show-report').onclick = () => { if (id) location.hash = reportHref(id); };
-  $('investigation-report').hidden = true;
-  const latest = store.state?.last_completed_investigation_id;
-  $('current-incident').innerHTML = `<div><h3>${activeId() ? '調查由後端執行，關閉頁面不會取消' : '目前沒有進行中的調查'}</h3><p>調查結論與服務健康分開顯示。</p></div><a href="${latest ? reportHref(latest) : '#investigations'}">${icon(latest ? 'report' : 'history')}${latest ? '查看最近一次報告' : '查看調查歷史'} ${icon('arrow')}</a>`;
-  if (!store.state) $('current-incident').innerHTML = '<div><h3>尚未取得調查狀態</h3><p>請查看上方連線錯誤，恢復後按「更新資料」。</p></div>';
+  $('journal-note').textContent = 'Monitor 保留最近 200 筆、顯示最新 50 筆，每 0.5 秒更新。' + (messageReplay ? '文字與推理摘要依模型實際回覆呈現；工具結果可展開。Monitor 斷線不補送。' : '此來源僅提供工具紀錄，未提供 Agent 文字回放。Monitor 斷線不補送。');
+}
+function scheduleJournal() {
+  if (journalTimer || disposed || document.hidden || $('topology-view').hidden) return;
+  journalTimer = setTimeout(() => { journalTimer = null; renderJournal(); }, 500);
 }
 
 async function loadEvents(id) {
@@ -622,7 +705,7 @@ function route() {
   }
   if (!id) renderHistory();
   if (list && id) { $('page-title').textContent = tab === 'chat' ? '調查對話' : '調查報告'; $('page-description').textContent = '追溯取證過程，閱讀有依據的調查結果。'; }
-  if (!list && !usage) renderGraph();
+  if (!list && !usage) { renderGraph(); renderJournal(); }
   if (usage) void loadUsage();
 }
 
@@ -720,7 +803,7 @@ function connectLogs() {
   };
   events.addEventListener('log', receive(log => {
     if (log.schema_version !== 'nightwatch.log.v1' || typeof log.event_id !== 'string' || !log.event_id || typeof log.monitor_id !== 'string' || !log.monitor_id || typeof log.message !== 'string' || !Number.isFinite(Date.parse(log.occurred_at)) || !['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL'].includes(log.level) || !Array.isArray(log.refs?.node_ids) || log.refs.node_ids.some(id => typeof id !== 'string')) throw new Error('不符合 nightwatch.log.v1。');
-    logs.set(JSON.stringify([log.monitor_id, log.event_id]), log); renderCurrent();
+    retainLog(logs, log); scheduleJournal();
   }));
   events.addEventListener('ping', receive(value => {
     // Monitor /events sends an empty heartbeat, independently of investigation SSE.
@@ -749,7 +832,7 @@ function visibilityChanged() {
   }
 }
 function dispose() {
-  disposed = true; pauseStreams(); clearInterval(heartbeatTimer);
+  disposed = true; pauseStreams(); clearInterval(heartbeatTimer); clearTimeout(journalTimer); journalTimer = null;
   clearInterval(snapshotPoll); cancelSnapshot(); snapshotIndexController?.abort();
   document.removeEventListener('visibilitychange', visibilityChanged);
 }
@@ -770,7 +853,7 @@ export function startWorkspace() {
   $('journal-panel').addEventListener('scroll', () => { if ($('journal-panel').scrollHeight - $('journal-panel').scrollTop - $('journal-panel').clientHeight < 70) $('chat-latest').hidden = true; });
   $('journal-entries').onclick = event => { const button = event.target.closest('[data-locate-node]'); if (button) locateNode(button.dataset.locateNode); };
   $('active-phase').previousElementSibling.textContent = '目前調查';
-  $('graph-viewport').parentElement.querySelector('.assessment-legend').textContent = '健康依後端觀測；同一節點位置固定，位置不表示呼叫順序。';
+  $('graph-viewport').parentElement.querySelector('.assessment-legend').textContent = '預設顯示主要流程、警告與異常節點；勾選全部觀測點可展開。連線僅顯示可見節點間的直接關係。';
   $('page-title').closest('.page-heading').insertAdjacentHTML('afterend', '<div class="investigation-actions"><button id="start-investigation" disabled>開始調查</button><span id="submission-status" role="status">僅在按下按鈕後開始；重新整理不會建立調查。</span></div>');
   $('snapshot-at').previousElementSibling.textContent = '顯示快照時間 · 台灣';
   $('graph-timeline').hidden = false;
@@ -803,6 +886,8 @@ export function startWorkspace() {
     button.onclick = () => { journalFilter = button.dataset.eventSource; document.querySelectorAll('[data-event-source]').forEach(b => b.setAttribute('aria-pressed', String(b === button))); renderCurrent(); };
   });
   $('show-journal').onclick = () => { $('journal-panel').hidden = false; };
+  $('node-search').insertAdjacentHTML('beforebegin', '<label class="graph-scope-toggle"><input id="show-all-nodes" type="checkbox"> 全部觀測點</label>');
+  $('show-all-nodes').onchange = event => { showAllNodes = event.target.checked; renderGraph(); };
   $('node-search').oninput = renderGraph; $('health-filter').onchange = renderGraph;
   $('zoom-in').onclick = () => { fit = false; zoom = Math.min(1.5, zoom + .1); renderGraph(); };
   $('zoom-out').onclick = () => { fit = false; zoom = Math.max(.5, zoom - .1); renderGraph(); };

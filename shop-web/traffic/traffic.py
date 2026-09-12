@@ -24,9 +24,9 @@ def env_float(name: str, default: float, minimum: float) -> float:
 
 
 BASE_URL = os.getenv("TRAFFIC_BASE_URL", "http://backend:8000").rstrip("/")
-INTERVAL_SECONDS = env_float("TRAFFIC_INTERVAL_SECONDS", 10.0, 1.0)
+INTERVAL_SECONDS = env_float("TRAFFIC_INTERVAL_SECONDS", 3.0, 1.0)
 CHECKOUT_PROBABILITY = min(
-    1.0, env_float("TRAFFIC_CHECKOUT_PROBABILITY", 0.2, 0.0)
+    1.0, env_float("TRAFFIC_CHECKOUT_PROBABILITY", 0.8, 0.0)
 )
 REQUEST_TIMEOUT_SECONDS = env_float("TRAFFIC_REQUEST_TIMEOUT_SECONDS", 12.0, 1.0)
 

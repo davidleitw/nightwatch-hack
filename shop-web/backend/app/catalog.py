@@ -13,7 +13,8 @@ from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Path as ApiPath, Response
-from .logging_config import configure_logging, log_service_request, logger, shutdown_logging
+from .logging_config import configure_logging, logger, shutdown_logging
+from .monitoring import linked_service_request, observe
 from .common import (
     CatalogLookupRequest,
     CatalogLookupResponse,
@@ -174,7 +175,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="日日選物 Catalog API", lifespan=lifespan)
-app.middleware("http")(log_service_request)
+app.middleware("http")(linked_service_request)
 
 
 @app.get("/api/health")
@@ -185,6 +186,7 @@ def health():
 
 
 @app.get("/api/products", response_model=list[ProductResponse])
+@observe("shop.catalog.read")
 def products():
     with connect() as db:
         rows = db.execute(
@@ -194,6 +196,7 @@ def products():
 
 
 @app.get("/api/products/{product_id}", response_model=ProductResponse)
+@observe("shop.catalog.read")
 def get_product(product_id: int = ApiPath(..., gt=0, le=MAX_PRODUCT_ID)):
     with connect() as db:
         row = _find_product(db, product_id)
@@ -283,6 +286,7 @@ def delete_product(product_id: int = ApiPath(..., gt=0, le=MAX_PRODUCT_ID)):
     "/internal/products/lookup",
     response_model=ProductLookupResponse,
 )
+@observe("shop.catalog.lookup")
 def lookup_products(request: ProductLookupRequest):
     # Preserve first-seen request order while avoiding duplicate product rows.
     requested = list(dict.fromkeys(request.product_ids))

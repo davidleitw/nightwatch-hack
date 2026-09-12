@@ -56,13 +56,9 @@ Compose 每 5 秒探測一次；**unhealthy 本身不會觸發自動重啟**，�
 
 ## 監測拓撲與故障判定
 
-```text
-shop.health → shop.db.query
-shop.products（gateway → catalog）
-shop.checkout.request → shop.checkout.logic → shop.db.write
-```
+目前有 18 個監測節點、16 條設定連線，涵蓋 Gateway、Catalog、Cart 與 Order 的商品讀取、購物車操作、結帳及跨服務補償。每個 monitor 的掛載位置、流量單位、耗時範圍、錯誤判定、延遲門檻及呼叫關聯，見 [Monitor 定義](MONITORS.md)。
 
-設定有六個節點、三條連線。Gateway 觀測 health 與商品列表，order 的 `OrderStore._health_sync()` 觀測 `shop.db.query`；商品列表走 catalog，不連到 order DB query。`shop.order.health` 事件仍未映射為獨立節點；catalog／cart 的內部操作尚未完整監測。
+節點代表操作範圍，不是容器；設定連線也不是實測邊流量。Catalog／Cart 的獨立 DB 量測、背景補償積壓及進行中請求指標尚未加入。既有 `shop.order.health` 事件仍未映射為獨立節點。
 
 ### 結帳故障觀測
 
@@ -97,7 +93,7 @@ DB write 不含 catalog／cart DB、啟動遷移或背景 reconcile。購物車�
 不是單一 DB transaction；失敗時還需確認 cart reservation 釋放，並以同一
 `Idempotency-Key` 驗證重試不重複建單。訂單提交後的 cart complete 失敗會記為 logic／
 request 失敗，order DB 仍可為 ok。
-購物車／商品 CRUD 尚未納入這三個結帳 monitor。
+購物車公開 CRUD 與商品讀取另有獨立 monitor，見上方定義；商品寫入尚未單獨監測。
 
 ## 60 秒窗口與資料保存
 

@@ -73,3 +73,13 @@ control 自己的 `NIGHTWATCH_MOCK_DATA=1` 是另一個獨立開關；它不等�
 `#investigations` 是歷史清單，`#investigations/<id>` 是獨立報告，`#investigations/<id>/chat` 是保存的對話；可相互切換。結束後右側保留最近一筆調查。報告先讀已收到的提交事件，保存的 detail 到達後補上證據與結案資訊。
 
 文字與摘要依模型每次實際回覆更新；沒有對話輸入或逐 token 推播。新的 `agent` SSE 事件使用同一條調查連線。讀取歷史時使用 `include_messages=1`，舊後端拒絕新參數時退回原事件 API 並標示沒有文字回放。未保存的舊訊息不會憑空補出。
+
+## 即時畫面更新與顯示範圍
+
+Shop 拓樸預設顯示商品、購物車讀取／修改、結帳 request／logic 與 DB write 六個主要節點，並自動包含所有 warning／failing 節點。可用「全部觀測點」、搜尋或從證據定位查看其餘節點。圖上只畫可見節點之間的原有直接連線；API 與調查仍保留全部觀測。非 Shop 拓樸維持全量顯示。
+
+Monitor log 在瀏覽器保留最近 200 筆，列表顯示最新 50 筆，每 500ms 合併更新一次；切到報告、其他頁面或背景分頁時不重繪隱藏列表。原始 JSONL 不受影響，瀏覽器紀錄仍不補送斷線期間事件。Graph SSE 維持每 5 秒更新，重複快照不重繪；節點 DOM 與已展開的節點詳情盡可能保留，量測更新不會重建整份調查報告。
+
+顯示篩選與 log 容量測試：`node --experimental-default-type=module --test console/tests/live-performance.test.mjs`。
+
+即時與歷史拓樸共用卡片式呈現，依可見節點的呼叫方向分層；同一組節點與連線維持相同位置。切換顯示範圍或拓樸改變時重新排版。卡片保留原始 ID，主要量測優先採用後端指定軸；未指定時一般節點優先顯示 P95，queue／volume 優先顯示飽和度，再使用其他可用量測。歷史模式不受即時 SSE 覆蓋，右側調查及 Log 維持即時。

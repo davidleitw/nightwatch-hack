@@ -168,7 +168,7 @@ async def _logged_request(request: Request, call_next):
 
 
 @app.get("/api/health")
-@monitor(MonitorConfig(name="GET /api/health", monitor_id="shop.health", level="WARNING"))
+@monitor(MonitorConfig(name="GET /api/health", monitor_id="shop.health", level="WARNING"), exception_is_error=exception_is_system_error, result_error=http_result_error)
 async def health():
     return await _proxy(
         ORDER_URL,
@@ -179,7 +179,7 @@ async def health():
 
 
 @app.get("/api/products", response_model=list[ProductResponse])
-@monitor(MonitorConfig(name="GET /api/products", monitor_id="shop.products", level="WARNING"))
+@monitor(MonitorConfig(name="GET /api/products", monitor_id="shop.products", level="WARNING"), exception_is_error=exception_is_system_error, result_error=http_result_error)
 async def products():
     return await _proxy(
         CATALOG_URL,

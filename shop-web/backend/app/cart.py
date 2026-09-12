@@ -16,7 +16,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Path as ApiPath, Response
-from .logging_config import configure_logging, log_service_request, logger, shutdown_logging
+from .logging_config import configure_logging, logger, shutdown_logging
+from .monitoring import linked_service_request, observe
 
 from .common import (
     CartItemInput,
@@ -275,6 +276,7 @@ def _decode_snapshot(raw: str) -> list[dict]:
     return [CheckoutItem.model_validate(item).model_dump() for item in decoded]
 
 
+@observe("shop.cart.catalog.lookup")
 async def _lookup_catalog(product_ids: list[int]) -> tuple[dict[int, dict], set[int]]:
     unique_ids = list(dict.fromkeys(product_ids))
     if not unique_ids:
@@ -493,7 +495,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="日日選物 Cart API", lifespan=lifespan)
-app.middleware("http")(log_service_request)
+app.middleware("http")(linked_service_request)
 
 
 @app.get("/api/health")
@@ -504,6 +506,7 @@ def health():
 
 
 @app.post("/api/carts", response_model=CartResponse, status_code=201)
+@observe("shop.cart.mutate")
 async def create_cart():
     cart_id = uuid4().hex
     with connect() as db:
@@ -516,11 +519,13 @@ async def create_cart():
 
 
 @app.get("/api/carts/{cart_id}", response_model=CartResponse)
+@observe("shop.cart.read")
 async def get_cart(cart_id: str = ApiPath(..., min_length=1)):
     return await _cart_payload(cart_id)
 
 
 @app.delete("/api/carts/{cart_id}", status_code=204)
+@observe("shop.cart.mutate")
 def delete_cart(cart_id: str = ApiPath(..., min_length=1)):
     with connect() as db:
         db.execute("BEGIN IMMEDIATE")
@@ -532,6 +537,7 @@ def delete_cart(cart_id: str = ApiPath(..., min_length=1)):
 
 
 @app.post("/api/carts/{cart_id}/items", response_model=CartResponse)
+@observe("shop.cart.mutate")
 async def add_cart_item(
     item: CartItemInput,
     cart_id: str = ApiPath(..., min_length=1),
@@ -570,6 +576,7 @@ async def add_cart_item(
 
 
 @app.get("/api/carts/{cart_id}/items", response_model=list[CartItemResponse])
+@observe("shop.cart.read")
 async def get_cart_items(cart_id: str = ApiPath(..., min_length=1)):
     return (await _cart_payload(cart_id))["items"]
 
@@ -578,6 +585,7 @@ async def get_cart_items(cart_id: str = ApiPath(..., min_length=1)):
     "/api/carts/{cart_id}/items/{product_id}",
     response_model=CartResponse,
 )
+@observe("shop.cart.mutate")
 async def set_cart_item_quantity(
     quantity: CartQuantityInput,
     cart_id: str = ApiPath(..., min_length=1),
@@ -604,6 +612,7 @@ async def set_cart_item_quantity(
     "/api/carts/{cart_id}/items/{product_id}",
     response_model=CartResponse,
 )
+@observe("shop.cart.mutate")
 async def delete_cart_item(
     cart_id: str = ApiPath(..., min_length=1),
     product_id: int = ApiPath(..., gt=0, le=MAX_PRODUCT_ID),
@@ -622,6 +631,7 @@ async def delete_cart_item(
 
 
 @app.delete("/api/carts/{cart_id}/items", response_model=CartResponse)
+@observe("shop.cart.mutate")
 async def clear_cart(cart_id: str = ApiPath(..., min_length=1)):
     with connect() as db:
         db.execute("BEGIN IMMEDIATE")
@@ -635,6 +645,7 @@ async def clear_cart(cart_id: str = ApiPath(..., min_length=1)):
     "/internal/carts/{cart_id}/prepare",
     response_model=CheckoutPrepareResponse,
 )
+@observe("shop.cart.prepare")
 async def prepare_checkout(
     request: CartPrepareRequest,
     cart_id: str = ApiPath(..., min_length=1),
@@ -761,6 +772,7 @@ def _finish_checkout(
 
 
 @app.post("/internal/carts/{cart_id}/complete", status_code=204)
+@observe("shop.cart.complete")
 def complete_checkout(
     request: CheckoutOperationRequest,
     cart_id: str = ApiPath(..., min_length=1),
@@ -769,6 +781,7 @@ def complete_checkout(
 
 
 @app.post("/internal/carts/{cart_id}/abort", status_code=204)
+@observe("shop.cart.abort")
 def abort_checkout(
     request: CheckoutOperationRequest,
     cart_id: str = ApiPath(..., min_length=1),

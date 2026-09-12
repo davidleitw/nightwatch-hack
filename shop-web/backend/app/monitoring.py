@@ -1,9 +1,10 @@
-"""Checkout result classification and order SQLite instrumentation."""
+"""Shop operation monitoring, HTTP correlation and order SQLite instrumentation."""
+import inspect
 import sqlite3
 from functools import partial
 
-from fastapi import HTTPException, Response
-from monitor import MonitorConfig, get_invocation_id, monitor
+from fastapi import HTTPException
+from monitor import MonitorConfig, get_invocation_id, invocation_context, monitor
 
 from .common import connect as sqlite_connect
 
@@ -30,8 +31,31 @@ def exception_is_system_error(exc: BaseException) -> bool:
     return not (isinstance(exc, HTTPException) and 400 <= exc.status_code < 500)
 
 
-def http_result_error(response: Response) -> str | None:
-    return f"HTTP {response.status_code}" if response.status_code >= 500 else None
+def http_result_error(response) -> str | None:
+    status = getattr(response, "status_code", None)
+    return f"HTTP {status}" if status is not None and status >= 500 else None
+
+
+def observe(monitor_id: str):
+    """One sample per operation; expected business 4xx are not system failures."""
+    def decorate(function):
+        wrapped = monitor(
+            MonitorConfig(monitor_id=monitor_id, level="WARNING"),
+            exception_is_error=exception_is_system_error,
+            result_error=http_result_error,
+        )(function)
+        # FastAPI inspects the wrapper in monitor's module. Resolve postponed
+        # endpoint annotations in their original module so bodies stay bodies.
+        wrapped.__signature__ = inspect.signature(function, eval_str=True)
+        return wrapped
+    return decorate
+
+
+async def linked_service_request(request, call_next):
+    # Internal service correlation only; this header never grants authority.
+    from .logging_config import log_service_request
+    with invocation_context(request.headers.get(PARENT_HEADER)):
+        return await log_service_request(request, call_next)
 
 
 class CheckoutConnection(sqlite3.Connection):

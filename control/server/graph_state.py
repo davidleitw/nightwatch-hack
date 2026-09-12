@@ -1,5 +1,5 @@
 """Config topology + monitor logs, with one atomic file checkpoint (single worker)."""
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from datetime import datetime
 import json
 import logging
@@ -121,8 +121,11 @@ class GraphStore:
         now = datetime.now(TAIPEI)
         cutoff = now.timestamp() - self.config.window_seconds
         nodes = []
+        by_monitor = defaultdict(list)
+        for log in recent.values():
+            by_monitor[log["monitor_id"]].append(log)
         for monitor in self.config.monitors:
-            logs = [log for log in recent.values() if log["monitor_id"] == monitor.monitor_id]
+            logs = by_monitor[monitor.monitor_id]
             active = [log for log in logs if cutoff <= timestamp(log["occurred_at"]) <= now.timestamp()]
             completed = [log for log in active if log.get("attributes", {}).get("kind") in ("finished", "exception")]
             failed = sum(log["attributes"].get("status") == "error" or log["attributes"]["kind"] == "exception" for log in completed)

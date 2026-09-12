@@ -26,7 +26,7 @@ def write_json_atomic(path: Path, value):
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as stream:
             temporary = Path(stream.name)
-            json.dump(value, stream, ensure_ascii=False, allow_nan=False)
+            stream.write(json.dumps(value, ensure_ascii=False, allow_nan=False))
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)

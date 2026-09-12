@@ -26,6 +26,8 @@ services:
       - catalog-data:/data
       - catalog-logs:/logs
       - shop-data:/legacy:ro
+      - ../control/monitor:/app/monitor:ro
+      - ../control/tmp:/app/tmp
 
   cart:
     <<: *backend-common
@@ -40,6 +42,8 @@ services:
       - cart-data:/data
       - cart-logs:/logs
       - shop-data:/legacy:ro
+      - ../control/monitor:/app/monitor:ro
+      - ../control/tmp:/app/tmp
     depends_on:
       catalog:
         condition: service_healthy
@@ -108,8 +112,8 @@ services:
     image: nightwatch-shop-traffic:local
     environment:
       TRAFFIC_BASE_URL: http://backend:8000
-      TRAFFIC_INTERVAL_SECONDS: ${TRAFFIC_INTERVAL_SECONDS:-10}
-      TRAFFIC_CHECKOUT_PROBABILITY: ${TRAFFIC_CHECKOUT_PROBABILITY:-0.2}
+      TRAFFIC_INTERVAL_SECONDS: ${TRAFFIC_INTERVAL_SECONDS:-3}
+      TRAFFIC_CHECKOUT_PROBABILITY: ${TRAFFIC_CHECKOUT_PROBABILITY:-0.8}
       TRAFFIC_REQUEST_TIMEOUT_SECONDS: ${TRAFFIC_REQUEST_TIMEOUT_SECONDS:-12}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:

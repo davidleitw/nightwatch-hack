@@ -95,6 +95,8 @@ curl --fail-with-body http://127.0.0.1:9999/api/graph
 
 The startup script preserves existing host ports; its output lists the actual addresses. Port overrides, data persistence, and deployment settings are in the [deployment guide](guardroom/README.md).
 
+The local storefront topology includes **18 operation nodes** across checkout, catalog, cart, and cross-service prepare/complete/abort calls. The Console defaults to six primary nodes plus warning/failing nodes; expand all observation points for full coverage. See [monitor definitions](guardroom/MONITORS.md) for units, thresholds, and gaps. Catalog/cart database metrics, pending requests, and order health mapping remain incomplete.
+
 ## Project map
 
 | Component | Responsibility |

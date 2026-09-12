@@ -28,11 +28,36 @@
     {
       "monitor_id": "shop.db.write", "node_id": "shop-db-write", "kind": "datastore",
       "latency": {"warning_ms": 500, "min_samples": 1}
-    }
+    },
+    {"monitor_id": "shop.catalog.read", "node_id": "shop-catalog-read", "kind": "service", "latency": {"warning_ms": 500, "min_samples": 1}},
+    {"monitor_id": "shop.catalog.lookup", "node_id": "shop-catalog-lookup", "kind": "service", "latency": {"warning_ms": 500, "min_samples": 1}},
+    {"monitor_id": "shop.cart.read", "node_id": "shop-cart-read", "kind": "service", "latency": {"warning_ms": 1000, "min_samples": 1}},
+    {"monitor_id": "shop.cart.mutate", "node_id": "shop-cart-mutate", "kind": "service", "latency": {"warning_ms": 1000, "min_samples": 1}},
+    {"monitor_id": "shop.cart.catalog.lookup", "node_id": "shop-cart-catalog-lookup", "kind": "service", "latency": {"warning_ms": 500, "min_samples": 1}},
+    {"monitor_id": "shop.cart.prepare", "node_id": "shop-cart-prepare", "kind": "service", "latency": {"warning_ms": 1000, "min_samples": 1}},
+    {"monitor_id": "shop.cart.complete", "node_id": "shop-cart-complete", "kind": "service", "latency": {"warning_ms": 500, "min_samples": 1}},
+    {"monitor_id": "shop.cart.abort", "node_id": "shop-cart-abort", "kind": "service", "latency": {"warning_ms": 500, "min_samples": 1}},
+    {"monitor_id": "shop.order.cart.prepare", "node_id": "shop-order-cart-prepare", "kind": "service", "latency": {"warning_ms": 1000, "min_samples": 1}},
+    {"monitor_id": "shop.order.catalog.lookup", "node_id": "shop-order-catalog-lookup", "kind": "service", "latency": {"warning_ms": 500, "min_samples": 1}},
+    {"monitor_id": "shop.order.cart.complete", "node_id": "shop-order-cart-complete", "kind": "service", "latency": {"warning_ms": 1000, "min_samples": 1}},
+    {"monitor_id": "shop.order.cart.abort", "node_id": "shop-order-cart-abort", "kind": "service", "latency": {"warning_ms": 1000, "min_samples": 1}}
   ],
   "edges": [
     {"from": "shop.health", "to": "shop.db.query", "kind": "calls"},
     {"from": "shop.checkout.request", "to": "shop.checkout.logic", "kind": "calls"},
-    {"from": "shop.checkout.logic", "to": "shop.db.write", "kind": "uses"}
+    {"from": "shop.checkout.logic", "to": "shop.db.write", "kind": "uses"},
+    {"from": "shop.products", "to": "shop.catalog.read", "kind": "calls"},
+    {"from": "shop.cart.read", "to": "shop.cart.catalog.lookup", "kind": "calls"},
+    {"from": "shop.cart.mutate", "to": "shop.cart.catalog.lookup", "kind": "calls"},
+    {"from": "shop.cart.prepare", "to": "shop.cart.catalog.lookup", "kind": "calls"},
+    {"from": "shop.cart.catalog.lookup", "to": "shop.catalog.lookup", "kind": "calls"},
+    {"from": "shop.checkout.logic", "to": "shop.order.cart.prepare", "kind": "calls"},
+    {"from": "shop.checkout.logic", "to": "shop.order.catalog.lookup", "kind": "calls"},
+    {"from": "shop.checkout.logic", "to": "shop.order.cart.complete", "kind": "calls"},
+    {"from": "shop.checkout.logic", "to": "shop.order.cart.abort", "kind": "calls"},
+    {"from": "shop.order.cart.prepare", "to": "shop.cart.prepare", "kind": "calls"},
+    {"from": "shop.order.catalog.lookup", "to": "shop.catalog.lookup", "kind": "calls"},
+    {"from": "shop.order.cart.complete", "to": "shop.cart.complete", "kind": "calls"},
+    {"from": "shop.order.cart.abort", "to": "shop.cart.abort", "kind": "calls"}
   ]
 }

@@ -7,9 +7,50 @@ const types = ['investigation.started', 'tool.started', 'observation.recorded', 
 
 // Layout is a local view choice. It is not added to the backend graph payload.
 export function graphLayout(graph) {
-  return [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id)).map((n, index) => ({
-    id: n.id, layout: {row: Math.floor(index / 4), col: index % 4},
-  }));
+  const ids = graph.nodes.map(n => n.id).sort();
+  const neighbors = new Map(ids.map(id => [id, new Set()]));
+  const parents = new Map(ids.map(id => [id, new Set()]));
+  for (const edge of graph.edges || []) {
+    if (!neighbors.has(edge.from) || !neighbors.has(edge.to) || edge.from === edge.to) continue;
+    neighbors.get(edge.from).add(edge.to); neighbors.get(edge.to).add(edge.from);
+    parents.get(edge.to).add(edge.from);
+  }
+  const pending = new Set(ids), components = [], isolated = [];
+  for (const id of ids) {
+    if (!pending.delete(id)) continue;
+    const component = [id];
+    for (let i = 0; i < component.length; i++) {
+      for (const next of neighbors.get(component[i])) if (pending.delete(next)) component.push(next);
+    }
+    if (component.length === 1) isolated.push(id); else components.push(component);
+  }
+  components.sort((a, b) => b.length - a.length || a[0].localeCompare(b[0]));
+  const result = [];
+  let offset = 0;
+  for (const component of components) {
+    const remaining = new Set(component.sort()), levels = new Map();
+    // Break cycles deterministically so reciprocal dependencies remain renderable.
+    while (remaining.size) {
+      const ready = [...remaining].filter(id => [...parents.get(id)].every(parent => !remaining.has(parent)));
+      if (!ready.length) ready.push([...remaining][0]);
+      for (const id of ready) {
+        levels.set(id, Math.max(-1, ...[...parents.get(id)].map(parent => levels.get(parent) ?? -1)) + 1);
+        remaining.delete(id);
+      }
+    }
+    const columns = [];
+    for (const id of component) (columns[levels.get(id)] ??= []).push(id);
+    const rows = Math.max(...columns.map(column => column.length));
+    columns.forEach((column, col) => column.forEach((id, row) => result.push({id, layout: {
+      col, row: offset + row * 2 + rows - column.length,
+    }})));
+    offset += rows * 2 + 1;
+  }
+  const columns = Math.max(1, Math.min(3, ids.length));
+  isolated.forEach((id, index) => result.push({id, layout: {
+    col: index % columns, row: offset + Math.floor(index / columns) * 2, isolated: true,
+  }}));
+  return result;
 }
 export function validateObservation(graph) {
   if (!object(graph) || !Array.isArray(graph.nodes) || graph.nodes.some(n => !object(n) || typeof n.id !== 'string')) throw new Error('graph 缺少合法節點。');
@@ -104,4 +145,26 @@ export function pairedActivity(events, terminal = false) {
   }
   for (const row of calls.values()) row.status = row.finished ? (row.finished.type === 'tool.failed' ? 'failed' : row.finished.type === 'report.submitted' ? 'reported' : 'recorded') : terminal ? 'incomplete' : 'running';
   return rows.sort((a, b) => a.seq - b.seq);
+}
+
+
+const primaryNodes = new Set([
+  'shop-products', 'shop-cart-read', 'shop-cart-mutate',
+  'shop-checkout-request', 'shop-checkout-logic', 'shop-db-write',
+]);
+
+// Keep the full observation intact for evidence and detail views.
+export function focusedGraph(graph, {all = false, search = '', selected = null} = {}) {
+  if (all || !graph.nodes.some(node => primaryNodes.has(node.id))) return graph;
+  const query = search.trim().toLowerCase();
+  const nodes = graph.nodes.filter(node => primaryNodes.has(node.id)
+    || ['warning', 'failing'].includes(node.status) || node.id === selected
+    || (query && node.id.toLowerCase().includes(query)));
+  const visible = new Set(nodes.map(node => node.id));
+  return {...graph, nodes, edges: graph.edges.filter(edge => visible.has(edge.from) && visible.has(edge.to))};
+}
+
+export function retainLog(logs, log, limit = 200) {
+  logs.set(JSON.stringify([log.monitor_id, log.event_id]), log);
+  while (logs.size > limit) logs.delete(logs.keys().next().value);
 }

@@ -48,7 +48,7 @@ from .http_client import (
     shutdown_http_clients,
 )
 from .logging_config import configure_logging, logger, shutdown_logging
-from .monitoring import CHECKOUT_LOGIC_MONITOR, PARENT_HEADER, connect, exception_is_system_error
+from .monitoring import CHECKOUT_LOGIC_MONITOR, PARENT_HEADER, connect, exception_is_system_error, observe
 
 
 DEFAULT_ORDER_DB_PATH = "/data/order.db"
@@ -904,6 +904,7 @@ class OrderService:
             )
         return response
 
+    @observe("shop.order.cart.prepare")
     async def _prepare_cart(
         self,
         cart_id: str,
@@ -935,9 +936,22 @@ class OrderService:
         operation_id: str,
         operation: str,
     ) -> None:
-        path = (
-            f"/internal/carts/{quote(cart_id, safe='')}/{operation}"
-        )
+        if operation == "complete":
+            return await self._complete_cart(cart_id, operation_id)
+        if operation == "abort":
+            return await self._abort_cart(cart_id, operation_id)
+        raise ValueError(f"unsupported cart operation: {operation}")
+
+    @observe("shop.order.cart.complete")
+    async def _complete_cart(self, cart_id: str, operation_id: str) -> None:
+        await self._send_cart_operation(cart_id, operation_id, "complete")
+
+    @observe("shop.order.cart.abort")
+    async def _abort_cart(self, cart_id: str, operation_id: str) -> None:
+        await self._send_cart_operation(cart_id, operation_id, "abort")
+
+    async def _send_cart_operation(self, cart_id: str, operation_id: str, operation: str) -> None:
+        path = f"/internal/carts/{quote(cart_id, safe='')}/{operation}"
         await self._request_dependency(
             self.cart_url,
             path,
@@ -947,6 +961,7 @@ class OrderService:
             dependency="cart",
         )
 
+    @observe("shop.order.catalog.lookup")
     async def _lookup_products(
         self,
         product_ids: list[int],

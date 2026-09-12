@@ -95,6 +95,8 @@ curl --fail-with-body http://127.0.0.1:9999/api/graph
 
 啟動腳本會沿用既有 host port，實際網址以執行輸出為準。連接埠覆寫、資料保存與部署設定見 [部署指南](guardroom/README.md)。
 
+本機商店拓樸包含 **18 個操作節點**，涵蓋結帳、商品、購物車及跨服務 prepare／complete／abort。Console 預設顯示六個主要節點與警告／異常節點，可展開全部觀測點。指標單位、門檻與缺口見 [Monitor 定義](guardroom/MONITORS.md)；catalog／cart DB、等待中請求及 order health 映射仍待補齊。
+
 ## 專案導覽
 
 | 元件 | 負責什麼 |

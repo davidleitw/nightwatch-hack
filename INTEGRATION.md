@@ -25,7 +25,7 @@
 | 優先 | 缺口 | 實際結果與下一個接點 |
 | --- | --- | --- |
 | 高 | control → 店面故障控制 | `LiveStore.execute()` 一律 503。前端 proxy 只允許建立調查 POST；Agent 可選用的 DemoRepair 已呼叫 Shop `/api/demo-faults`，但不會啟用這些舊 UI 路由。 |
-| 高 | 拆服務後的監測拓樸 | [設定](guardroom/shop-web.config.json) 已有六個節點、三條連線；gateway request → order logic → DB write 可觀察結帳故障，order health 的 DB 讀取發送 `shop.db.query`。catalog／cart 內部操作仍未完整監測，`shop.order.health` 未映射為獨立節點。 |
+| 高 | 拆服務後的監測拓樸 | [設定](guardroom/shop-web.config.json) 已有 18 個節點、16 條連線，包含 Catalog 讀取、Cart 操作、Order 下游查詢及 prepare／complete／abort；[定義](guardroom/MONITORS.md) 記錄量測範圍與判定。尚缺 Catalog／Cart 獨立 DB 量測、等待中請求、補償積壓與 `shop.order.health` 節點映射。 |
 | 高 | 批准、修復、修復驗證 | 已有明確啟用的本機演練故障解除工具，尚無完整批准流程、通用修復或業務恢復驗證。永久故障與數值租期皆可讀取；解除控制不等於結帳恢復。 |
 | 中 | 完整實驗報告 | 舊 incident report／timeline 在 live 回 503；已有 investigation report 是調查結果，沒有注入真相、基線比較、修復驗證。 |
 | 中 | 指標／trace／health | Prometheus 與 Jaeger 固定不可用；saturation=null，trend=na，edge 量測=null、observed=false。alive 只是窗口內有 monitor 事件，graph 沒有獨立 health probe 或合成顧客訂單率；Agent 可選用 Shop health 工具，但它不量測結帳恢復。見 [GraphStore](control/server/graph_state.py)。 |

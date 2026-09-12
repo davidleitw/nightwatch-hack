@@ -86,7 +86,7 @@ def _start_service(runtime_root, name, module, port, environment):
             "warning",
             "--no-access-log",
         ],
-        cwd=BACKEND_DIR,
+        cwd=runtime_root,
         env=environment,
         stdout=log_stream,
         stderr=subprocess.STDOUT,
@@ -365,6 +365,69 @@ class ApiTests(unittest.TestCase):
         self.assertIsNotNone(row, f"找不到已保存訂單 {order_id}")
         created_at, payload = row
         return created_at, json.loads(payload)
+
+    def test_monitor_cross_service_checkout_and_abort(self):
+        log_path = Path(_RUN_DIRECTORY.name) / "tmp" / "monitor.jsonl"
+        offset = log_path.stat().st_size if log_path.exists() else 0
+        product = self.create_product()
+        cart = self.create_cart()
+        self.assertEqual(self.request("/api/products")[0], 200)
+        self.assertEqual(self.request(
+            f"/api/carts/{cart['id']}/items", "POST",
+            {"product_id": product["id"], "quantity": 1},
+        )[0], 200)
+        self.assertEqual(self.request(f"/api/carts/{cart['id']}")[0], 200)
+        self.assertEqual(self.request("/api/demo-faults", "POST", {"fault_id": "checkout_exception"})[0], 200)
+        try:
+            self.assertEqual(self.checkout_order(cart["id"])[0], 500)
+        finally:
+            self.assertEqual(self.request("/api/demo-faults", "DELETE")[0], 200)
+        self.assertEqual(self.checkout_order(cart["id"])[0], 201)
+        # Empty-cart business rejection must not count as a system failure.
+        self.assertEqual(self.checkout_order(cart["id"])[0], 400)
+        with log_path.open() as stream:
+            stream.seek(offset)
+            events = [json.loads(line) for line in stream]
+        starts = {e["invocation_id"]: e for e in events if e["kind"] == "started"}
+        expected_links = {
+            "shop.catalog.read": "shop.products",
+            "shop.cart.catalog.lookup": "shop.cart.read",
+            "shop.catalog.lookup": "shop.cart.catalog.lookup",
+            "shop.order.cart.prepare": "shop.checkout.logic",
+            "shop.cart.prepare": "shop.order.cart.prepare",
+            "shop.order.catalog.lookup": "shop.checkout.logic",
+            "shop.order.cart.complete": "shop.checkout.logic",
+            "shop.cart.complete": "shop.order.cart.complete",
+            "shop.order.cart.abort": "shop.checkout.logic",
+            "shop.cart.abort": "shop.order.cart.abort",
+        }
+        for child, parent in expected_links.items():
+            self.assertTrue(any(
+                e["monitor_id"] == child
+                and starts.get(e["parent_invocation_id"], {}).get("monitor_id") == parent
+                for e in starts.values()
+            ), (child, parent))
+        completions = [e for e in events if e["monitor_id"] == "shop.checkout.request" and e["kind"] == "finished"]
+        self.assertEqual([e["status"] for e in completions], ["error", "ok", "ok"])
+        self.assertTrue(any(e["monitor_id"] == "shop.cart.mutate" and e["kind"] == "finished" for e in events))
+
+    def test_monitor_records_returned_downstream_500(self):
+        log_path = Path(_RUN_DIRECTORY.name) / "tmp" / "monitor.jsonl"
+        offset = log_path.stat().st_size if log_path.exists() else 0
+        catalog_db = Path(_RUN_DIRECTORY.name) / "catalog" / "shop.db"
+        # Real downstream SQL failure: the gateway returns a Response, not an exception.
+        with sqlite3.connect(catalog_db) as db:
+            db.execute("ALTER TABLE products RENAME TO unavailable_products")
+        try:
+            self.assertEqual(self.request("/api/products")[0], 500)
+        finally:
+            with sqlite3.connect(catalog_db) as db:
+                db.execute("ALTER TABLE unavailable_products RENAME TO products")
+        with log_path.open() as stream:
+            stream.seek(offset)
+            events = [json.loads(line) for line in stream]
+        for mid in ("shop.products", "shop.catalog.read"):
+            self.assertTrue(any(e["monitor_id"] == mid and e["status"] == "error" for e in events), mid)
 
     def test_products_crud_and_trimmed_fields(self):
         self.assertEqual(self.request("/api/health"), (200, {"status": "ok"}))

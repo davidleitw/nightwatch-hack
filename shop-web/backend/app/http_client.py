@@ -5,12 +5,17 @@ from __future__ import annotations
 import asyncio
 import json
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass
 from functools import partial
 import threading
 from typing import Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+from monitor import get_invocation_id
+
+from .monitoring import PARENT_HEADER
 
 
 BUSINESS_TIMEOUT_SECONDS = 15.0
@@ -104,6 +109,9 @@ async def request_json(
         "Accept": "application/json",
         **(headers or {}),
     }
+    parent_id = get_invocation_id()
+    if parent_id:
+        request_headers[PARENT_HEADER] = parent_id
     encoded_body = None
     if payload is not None:
         encoded_body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -119,7 +127,7 @@ async def request_json(
         request_headers,
         timeout,
     )
-    return await loop.run_in_executor(executor, call)
+    return await loop.run_in_executor(executor, copy_context().run, call)
 
 
 def shutdown_http_clients() -> None:

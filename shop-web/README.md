@@ -86,13 +86,13 @@ make clean CONFIRM=yes         # 會刪除所有資料與 logs volumes
 
 ## 觀測流量
 
-Compose 會啟動 `traffic` 背景服務，預設每 10 秒經由 gateway 執行商品查詢、建立與操作匿名購物車；每輪有 20% 機率執行 checkout。這些請求會經過 catalog、cart 與 order，讓服務關聯圖在沒有瀏覽器操作時仍有資料。服務只使用標準庫與 Compose 內部網路，不會對外連線。
+Compose 會啟動 `traffic` 背景服務，預設每 3 秒經由 gateway 執行商品查詢、建立與操作匿名購物車；每輪有 80% 機率執行 checkout。這些請求會經過 catalog、cart 與 order，讓服務關聯圖在沒有瀏覽器操作時仍有資料。服務只使用標準庫與 Compose 內部網路，不會對外連線。
 
 可用環境變數調整行為：
 
 ```sh
-TRAFFIC_INTERVAL_SECONDS=10
-TRAFFIC_CHECKOUT_PROBABILITY=0.2
+TRAFFIC_INTERVAL_SECONDS=3
+TRAFFIC_CHECKOUT_PROBABILITY=0.8
 TRAFFIC_REQUEST_TIMEOUT_SECONDS=12
 ```
 
