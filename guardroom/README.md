@@ -3,6 +3,14 @@
 以 `shop-web/backend/app` 為範例，單一程序、檔案儲存。API 回傳符合
 `console/schema-draft/graph.schema.json` 的資料實例，不改寫 schema 定義。
 
+本文件是 Guard Room 功能、設定與操作的主要說明。FastAPI 的本機開發方式及程式模組分工
+見 [Server 開發入口](../control/server/README.md)。
+
+Monitor 送出的是單次執行的 status／duration_ms 與函式內 log，Guard Room 計算 graph 的
+p95／errors／traffic／status。Logger 擷取與輸出方式見
+[monitor README](../control/monitor/README.md)；拓撲與延遲門檻設定在
+[shop-web.config.json](shop-web.config.json)。
+
 ## 整個流程
 
 1. **讀 config**：啟動時載入 `guardroom/shop-web.config.json`，可用
@@ -19,7 +27,8 @@
 5. **彙總節點**：依事件原始時間計算最近 `window_seconds`（預設 60 秒）的
    完成次數／秒、失敗比例、duration 的 nearest-rank p95。
    finished／exception 才算完成；started 和一般 log 不重複計次。
-   全失敗=failing、部分失敗=warning、全成功=ok、無完成資料=unknown。
+   全失敗=failing、部分失敗=warning、無完成資料=unknown。
+   全成功時，若已設定 latency 門檻且樣本足夠、p95 達門檻則為 warning，其餘為 ok。
    一般 ERROR log 不直接改健康，assessment 保持 unassessed。
 6. **持久化**：snapshot、近期最多 10000 筆事件、讀取位置一起寫暫存檔，
    flush／fsync 後 atomic replace；成功才更新記憶體並廣播 SSE log。
@@ -48,6 +57,59 @@ shop.products → shop.db.query
 Compose 的 `control/tmp/monitor.jsonl` 共用掛載，無需額外 HTTP bridge。
 monitor 不需要填 node_ids，由 Guard Room config 映射。
 
+### 每個 monitor 的 latency warning
+
+在 monitor 定義中可選填 `latency`，由 Guard Room 計算並判定，shop-web 不需自行計算 p95：
+
+```json
+{
+  "monitor_id": "shop.products",
+  "node_id": "shop-products",
+  "kind": "service",
+  "latency": {"warning_ms": 500, "min_samples": 20}
+}
+```
+
+範例 config 先替商品列表啟用上述值，作為 demo 初始門檻，並非實測 SLO。
+Health 和 DB query 尚未設定 latency，維持既有錯誤比例判定。
+`warning_ms` 必須是有限正數（毫秒），`min_samples` 必須是正整數；修改 config 後重啟生效。
+
+沿用 `window_seconds`（預設 60 秒）：只有 finished／exception 事件的有效 duration_ms
+才算耗時樣本，忽略缺值、非數字、非有限值及負值。樣本足夠且 p95 **大於或等於**
+warning_ms，會將原本全成功的 ok 提升為 warning；既有 failing／warning 不會被降級。
+Started 和一般 logger 訊息不計入樣本數；沒有完成事件仍為 unknown。
+樣本不足時仍顯示可計算的 p95，但不觸發 latency warning。未設定 latency 或設為 null
+表示不啟用延遲判定。各 monitor 僅使用自己的事件，不沿 edge 傳播健康狀態。
+
+此版使用絕對門檻，沒有基準比較、持續時間或不同的恢復門檻；下一次重算時，若 p95
+低於門檻或樣本數不足，就回到既有錯誤比例判定。低流量 monitor 應另調整 min_samples，
+例如每 10 秒一次的 health 在 60 秒內約只有 6 筆，不適用 20 筆門檻。
+判定寫進 live／歷史 snapshot 的既有 status 欄位；目前沒有另外新增結構化 warning 原因。
+歷史 graph 保留當時結果，不因後續調整門檻重算。
+
+每次 graph 更新依下表判定 node.status，第一個符合的條件生效：
+
+| 條件 | node.status |
+| --- | --- |
+| 窗口內沒有完成事件 | unknown |
+| 完成事件全部失敗 | failing |
+| 完成事件部分失敗 | warning |
+| 全成功、latency 已啟用、有效樣本數 ≥ min_samples、p95 ≥ warning_ms | warning |
+| 全成功，其餘情況 | ok |
+
+例如商品列表窗口內有 20 筆有效成功樣本，p95=650ms、門檻=500ms，
+`GET /api/graph` 會包含以下節點欄位（僅節錄，不是完整 graph）：
+
+```json
+{"id": "shop-products", "p95_ms": 650, "errors": 0, "status": "warning"}
+```
+
+同樣耗時但只有 19 筆有效樣本時，status 仍為 ok；這不代表延遲已被充分驗證。
+Monitor 的單次 status=ok 不受影響，因為函式執行結果與窗口健康判定分開處理。
+P95 使用完成事件的函式耗時，不是 HTTP middleware 的 request duration，也不是 edge 延遲。
+
+### Shop logger
+
 Shop 啟動時將 monitor handler 掛到 `shop` logger。三個 monitor 的 `level="WARNING"`
 只收執行期間的 WARNING／ERROR／CRITICAL logger 訊息；DEBUG／INFO 不進 monitor，
 應用程式的 stdout 和 `/logs/app.log` 仍依原本 `LOG_LEVEL` 設定輸出。
@@ -58,6 +120,8 @@ Logger 本身先過濾掉的訊息無法由 monitor 補回，例如 `LOG_LEVEL=E
 目前這三個函式沒有額外的業務 logger 呼叫，新增實際異常處理時可在函式內記錄。
 未處理例外已由 monitor 自動捕捉，不需再記錄一次相同 exception。
 啟停與 request middleware 的既有 log 不在 monitor invocation 內，仍只寫應用日誌。
+
+### 啟動與觀察
 
 從 repo 根目錄執行（需 uv、curl、lsof、Docker）：
 
@@ -71,7 +135,24 @@ curl http://127.0.0.1:8001/api/graph
 ```
 
 應有 shop-health、shop-products、shop-db 三個節點和兩條 edge。
-首次啟動从 log 開頭讀，舊資料多時需數個週期追上。
+首次啟動從 log 開頭讀，舊資料多時需數個週期追上。上述單次 curl 只驗證資料流，
+不會累積到商品列表 latency warning 所需的 20 筆，也不保證耗時超過門檻。
+
+## 更新頻率與多 monitor
+
+| 路徑 | 更新時機 | 一批的定義 |
+| --- | --- | --- |
+| JSONL → live graph | 每輪等待 1 秒後讀取、重算並寫檔，即使無新事件也更新窗口 | 最多 1000 行，僅完整且有效的事件進入聚合 |
+| HTTP → live graph | 每次 POST 接收並提交，無需等下一輪 JSONL | 一個 logs 陣列，1–50 筆事件，可包含多個 monitor |
+| live graph → history | 啟動保存一份，其後約每 history.interval_seconds 保存 | 當時最新的完整 graph；預設 5 秒 |
+| GET /api/graph | 只讀已提交的最新 graph | 不讀新 log、不重新計算、不觸發寫檔 |
+
+實際週期間隔還包含處理與寫檔時間。GuardRoomSink 預設以 50 筆／0.5 秒組成 HTTP 批次，
+詳細行為見 monitor README；一個成功函式呼叫至少有 started、finished 兩筆事件。
+
+單一 worker 逐批執行完整提交，每個 node 僅使用自己 monitor_id 的事件；
+每次仍重算整張 graph 並整份寫檔，其他 node 可能因窗口過期或共用容量淘汰而改變。
+不沿 config edge 傳播 failing／warning。seq 每次成功提交加一，與事件數、歷史檔案數不同。
 
 ## Config 與檔案
 
