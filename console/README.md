@@ -80,6 +80,8 @@ python3 -B console/serve.py --port 4174 --control-url http://127.0.0.1:3300
 
 ## 調查工作台與事故模板
 
+右側「Agent 用量」顯示事故累計 token、輸入／快取輸入／輸出拆分，以及 Prompt cache 命中率（快取輸入 ÷ 全部輸入）。取自 `incident.usage`，隨既有 SSE 事故事件重拉完整狀態；數值不重複累加。展開「統計口徑與計算方式」可查看公式、模型呼叫次數及耗時。缺值顯示「—」，非法值在用量區顯示錯誤；舊錄影没有事故累計用量，不以示意數字填補。資料設計與後端待確認事項見 [schema-draft/USAGE.md](schema-draft/USAGE.md)。
+
 主頁改為左側 graph、右側調查面板，沿用事故模板的淺色、細分隔線與文字層級。右側保持 AI 結論，切換「調查事件」或「AI 事故報告」；報告呈現現有事故的起點、傳播路徑、修復提案與可展開證據。點右側服務名稱可定位左圖。窄於 761px 時上下排列。
 
 錄影直接讀既有 incident journal，隨時間滑桿回放；Monitor／Agent／系統分開標示，可篩選。這份錄影沒有 Monitor 原始 log，Monitor 頁籤會顯示空狀態。即時頁面接收 SSE incident 與草案 nightwatch.log.v1 的 log，僅保留本頁收到的事件，不宣稱完整歷史；Monitor 的後端投影仍待正式契約同步與實機驗證。

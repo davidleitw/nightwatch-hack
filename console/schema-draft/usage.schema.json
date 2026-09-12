@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NightWatch incident Agent usage — frontend profile",
+  "description": "Existing API.md section 6 incident.usage fields. A cumulative snapshot for one incident, replaced on refresh, never added to previous snapshots. Missing usage means unavailable; do not fabricate zeroes.",
+  "allOf": [
+    { "$ref": "#/$defs/tokens" },
+    {
+      "type": "object",
+      "required": ["calls", "elapsed_secs"],
+      "properties": {
+        "calls": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "elapsed_secs": { "type": "number", "minimum": 0 }
+      }
+    }
+  ],
+  "$defs": {
+    "tokens": {
+      "type": "object",
+      "required": ["input_tokens", "cached_tokens", "output_tokens"],
+      "properties": {
+        "input_tokens": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "All input tokens, including cached tokens." },
+        "cached_tokens": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Subset of input_tokens served from prompt cache. Must be <= input_tokens; enforce this cross-field constraint in code." },
+        "output_tokens": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Reported output tokens. Do not add a separate reasoning count to this value." }
+      },
+      "additionalProperties": true
+    }
+  }
+}

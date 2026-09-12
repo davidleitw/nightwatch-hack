@@ -9,6 +9,12 @@
     {
       "type": "object",
       "properties": {
+        "incident": {
+          "type": ["object", "null"],
+          "properties": {
+            "usage": { "$ref": "usage.schema.json" }
+          }
+        },
         "graph_now": {
           "$ref": "graph.schema.json"
         },

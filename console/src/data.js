@@ -2,6 +2,29 @@ const phases = new Set(['baseline','detected','investigating','awaiting_approval
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 let localMock = false;
 export function setMockMode(enabled) { localMock = enabled; }
+// A full incident projection is authoritative. Never sum tool events: a model
+// response can invoke several tools, and replay can deliver the same usage again.
+export function readUsage(value) {
+  const fields = ['input_tokens', 'cached_tokens', 'output_tokens', 'calls', 'elapsed_secs'];
+  const result = Object.fromEntries(fields.map(key => [key, null]));
+  const problems = [];
+  if (value === undefined || value === null) return {...result, total: null, rate: null, problems};
+  if (!object(value)) return {...result, total: null, rate: null, problems: ['usage 必須是物件。']};
+  for (const key of fields) {
+    if (value[key] === undefined) continue;
+    if (typeof value[key] !== 'number' || !Number.isFinite(value[key]) || value[key] < 0 || (key !== 'elapsed_secs' && !Number.isSafeInteger(value[key]))) {
+      problems.push(`${key} 必須是非負${key === 'elapsed_secs' ? '數值' : '安全整數'}。`);
+    } else result[key] = value[key];
+  }
+  if (result.cached_tokens !== null && result.input_tokens !== null && result.cached_tokens > result.input_tokens) {
+    problems.push('cached_tokens 不得大於 input_tokens。');
+    result.cached_tokens = null;
+  }
+  let total = result.input_tokens !== null && result.output_tokens !== null ? result.input_tokens + result.output_tokens : null;
+  if (total !== null && !Number.isSafeInteger(total)) { problems.push('token 總量超出安全整數範圍。'); total = null; }
+  const rate = result.input_tokens > 0 && result.cached_tokens !== null ? result.cached_tokens / result.input_tokens : null;
+  return {...result, total, rate, problems};
+}
 export function apiPath(path) {
   if (!localMock) return path;
   const url = new URL(path, location.origin);

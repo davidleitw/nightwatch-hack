@@ -1,5 +1,7 @@
 # NightWatch hackathon：前後端 schema 交接
 
+新增：[Agent token 與 Prompt cache 命中率](USAGE.md)；`usage.schema.json` 約束既有事故 `usage` 欄位，`state.schema.json` 引用它。用量為事故累計快照，UI 不累加工具事件。
+
 目前已確定：**左側以 8–12 個節點為版面目標，數量與服務名單不寫死；monitor log 收到就出現在右側，與 Agent 調查紀錄共用時間線。**
 
 這份目錄是提案文件與 JSON Schema，尚未修改後端、正式契約或實際接線。以下四份就是本次必要範圍；不做動態分組或逐字思考串流。

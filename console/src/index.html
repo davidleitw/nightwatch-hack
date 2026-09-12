@@ -36,6 +36,7 @@
     <aside class="panel investigation-panel" aria-label="事故調查">
       <div class="investigation-heading"><h2>事故調查</h2><span id="investigation-phase"></span></div>
       <div id="investigation-summary"></div>
+      <section id="agent-usage" class="agent-usage" aria-label="Agent token 使用量"></section>
       <div class="investigation-tabs" role="group" aria-label="調查內容"><button id="show-journal" aria-pressed="true">調查事件</button><button id="show-report" aria-pressed="false">AI 事故報告</button></div>
       <section id="journal-panel"><div class="journal-toolbar"><div role="group" aria-label="事件來源"><button data-event-source="all" aria-pressed="true">全部</button><button data-event-source="monitor" aria-pressed="false">Monitor</button><button data-event-source="agent" aria-pressed="false">Agent</button><button data-event-source="system" aria-pressed="false">系統</button></div><span id="journal-count"></span></div><p id="journal-note"></p><div id="journal-entries"></div></section>
       <section id="investigation-report" hidden></section>

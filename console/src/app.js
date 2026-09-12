@@ -1,4 +1,4 @@
-import {apiPath,readJSON,validateState,validateGraph,validateIncident,loadRecording,projectRecording} from './data.js';
+import {apiPath,readJSON,validateState,validateGraph,validateIncident,loadRecording,projectRecording,readUsage} from './data.js';
 import {setupConnection} from './connect.js';
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -154,7 +154,16 @@ function locateInvestigation(id){
 }
 function bindInvestigationNodes(){document.querySelectorAll('[data-investigation-node]').forEach(b=>b.onclick=()=>locateInvestigation(b.dataset.investigationNode));}
 function nodeLink(id){return `<button class="node-link" data-investigation-node="${esc(id)}">${esc(id)} ↗</button>`;}
+function renderUsage(){
+ const i=state?.incident,u=readUsage(i?.usage),expanded=$('usage-explanation')?.open;
+ const reported=i?.usage!==undefined && i?.usage!==null;
+ const status=!i?'等待調查':u.problems.length?'資料異常':!reported?'尚未回報':source==='recording'?'錄影用量':isClosed(i)?'結案累計':'目前累計';
+ const note=!i?'事故開始後顯示 Agent 用量。':u.problems.length?u.problems.join(' '):!reported?(source==='recording'?'這份錄影沒有事故累計用量。':'後端尚未提供本次事故的累計用量。'):u.input_tokens===0?'尚無輸入 token，命中率不適用。':'依後端最新事故投影更新；進行中的模型請求可能尚未計入。';
+ const percent=u.rate===null?null:u.rate*100;
+ $('agent-usage').innerHTML=`<div class="usage-heading"><h3>Agent 用量</h3><span class="${u.problems.length?'usage-invalid':''}">${status}</span></div><div class="usage-primary"><div><span class="metric-label">總 token</span><strong>${esc(number(u.total))}</strong><small>輸入 + 輸出</small></div><div><span class="metric-label">Prompt cache 命中率</span><strong>${esc(number(u.rate,'%',100))}</strong><small>快取輸入 / 全部輸入</small></div></div><div class="usage-meter" ${percent===null?'':'role="meter" aria-label="Prompt cache 命中率" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+percent+'"'}><span style="width:${percent??0}%"></span></div><dl class="usage-breakdown"><div><dt>輸入 token</dt><dd>${esc(number(u.input_tokens))}</dd></div><div><dt>其中快取輸入</dt><dd>${esc(number(u.cached_tokens))}</dd></div><div><dt>輸出 token</dt><dd>${esc(number(u.output_tokens))}</dd></div></dl><p class="usage-note ${u.problems.length?'usage-invalid':''}" ${u.problems.length?'role="alert"':''}>${esc(note)}</p><details id="usage-explanation" ${expanded?'open':''}><summary>統計口徑與計算方式</summary><p>範圍為這次事故的 Agent 累計。總 token = input_tokens + output_tokens；cached_tokens 已包含在輸入，不重複加總。</p><p>Prompt cache 命中率 = cached_tokens ÷ input_tokens × 100%。代表輸入 token 的快取比例，與回答正確率無關。缺少欄位顯示「—」，實際回報 0 才顯示 0。</p><p>模型呼叫 ${esc(number(u.calls))} 次 · 累計耗時 ${esc(number(u.elapsed_secs))} 秒。事件重送不累加；重新整理後以後端完整投影為準。</p></details>`;
+}
 function renderInvestigation(){
+ renderUsage();
  const i=state?.incident,root=i?.hypothesis?.root_cause;
  $('investigation-phase').innerHTML=i?badge(i):'';
  $('investigation-summary').innerHTML=`<div class="report-kicker">${root?'AI 結論':'目前調查'}</div><h3>${esc(root?.summary_zh||i?.detection?.summary_zh||'等待事故資料')}</h3><div class="summary-meta">${root?.node?nodeLink(root.node):''}<span>${esc(i?.id||'尚無事故')}</span></div>`;
