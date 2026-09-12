@@ -64,6 +64,11 @@ bash control/run-agent.sh --graph-url http://127.0.0.1:8001/api/graph --model gp
 不再默默用舊錄影。HTTP 端可用既有 `POST /api/investigations` 啟動，
 介面見 [INVESTIGATION-FRONTEND.md](INVESTIGATION-FRONTEND.md)。
 
+HTTP 後端也會在同一節點連續三次新快照為 warning／failing 時自動啟動調查。
+SQLite 旗標防止同一段異常重複開案；結案、失敗、重啟都不解除，確認恢復後才重新啟用。
+條件與生命週期見 [server 自動偵測說明](server/README.md#自動偵測與調查旗標)。
+CLI 不執行此背景偵測。
+
 | 環境變數 | 預設與優先序 |
 | --- | --- |
 | `NIGHTWATCH_GRAPH_URL` | `http://127.0.0.1:8001/api/graph`；CLI `--graph-url` 優先 |

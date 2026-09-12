@@ -30,6 +30,7 @@ uv run uvicorn main:app --reload --host 127.0.0.1 --port 8001
 | [frontend_mock.py](frontend_mock.py) | 前端 mock 資料與記憶體狀態 |
 | [investigation_api.py](investigation_api.py) | 調查 API、模型與 graph 來源接線、調查生命週期 |
 | [investigation_store.py](investigation_store.py) | 調查 session 的 SQLite 持久化 |
+| [detector.py](detector.py) | 新快照的連續異常與恢復判定；持久旗標由 investigation store 保存 |
 
 ## 調查開發設定
 
@@ -44,6 +45,39 @@ Live graph adapter 提供 `get_graph`（含歷史 timestamp）、`list_graph_sna
 離線檢查可透過 `install_investigations(..., model_factory=...)` 注入 Python model factory，
 或在 app 啟動前替換 `app.state.investigation_manager.model_factory`。
 HTTP client 不可選擇模型或 graph URL。完整介面見 [調查前端文件](../INVESTIGATION-FRONTEND.md)。
+
+## 自動偵測與調查旗標
+
+Investigation manager 在既有約每 5 秒的 graph refresh 後執行偵測，與瀏覽器是否連線無關。
+同一節點連續三次新快照為 `warning` 或 `failing` 才確認異常；中途兩種狀態互換仍算異常。
+直接沿用 Guard Room 的 status，不自行重算錯誤／延遲門檻，也不把 `alive=false` 當作死亡。
+`unknown` 不觸發。這是目前 Monitor graph 的規則，不是舊 shopper／基線偵測規則。
+
+只接受 seq 與 at 都前進、快照距現在不超過 15 秒（容許未來 5 秒時鐘差）、
+且 `sources.logstore.ok=true` 的資料。兩張快照間隔超過 15 秒會重新累計；讀取失敗、
+重複／倒退快照或來源無新資料也會中斷累計。Prometheus／Jaeger 未接入不阻擋此偵測。
+Graph URL 帶 query（預覽／指定歷史）或 `NIGHTWATCH_MOCK_DATA=1` 時停用自動偵測。
+
+確認後先在同一個 investigation SQLite 的 `detections` 表保存 `latched=1`、固定 request_id、
+觸發節點、三次確認量測與當時完整 graph，再透過既有 manager 建立 `trigger.source=detector`
+的 session。每個來源 URL 只有一個有效旗標，旗標生效期間其他異常不另開調查。
+Agent 開場會收到保存的觸發資訊，再用現有唯讀工具取證；偵測本身不是根因結論或工具 evidence ID。
+
+旗標生命週期：
+
+- 同一異常持續存在時，session 完成、unresolved、模型失敗或服務重啟都不清旗標、不自動重跑。
+- 若已有手動調查，保存這一次偵測，等待執行名額；每次讀到新 graph 都重新確認觸發節點
+  仍有異常才嘗試建立。這不新增調查佇列，同時仍只有一個 running session。
+- 若程序在寫入旗標後、建立 session 前停止，重啟後沿用同一 request_id 嘗試建立。
+  若 session 已存在，就不重跑；原本 running 的 session 依既有機制歸檔為 interrupted。
+- 觸發節點都連續三次新快照為 `ok`、全圖沒有 warning／failing，且沒有 running session，
+  才把旗標改為 `latched=0`。觸發節點 unknown／消失不算恢復。解除後重新累計下一次異常。
+- 偵測資料會隨 session 歷史保留。程序重啟只重置尚未確認的累計，不解除已保存旗標。
+  偵測／保存錯誤會記錄 backend error log，下次 refresh 重試，不影響 graph 更新。
+
+三次確認、15 秒新鮮度與恢復後重新啟用，是本次自動排查採用的預設假設。
+自動排查會使用既有模型設定；未設定金鑰仍保存 failed session，不會因每次 polling 重複失敗開案。
+新表與唯一索引在開啟既有 DB 時建立，不改既有 session、事件或 HTTP response 欄位。
 
 ## SSE 接線
 

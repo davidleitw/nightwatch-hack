@@ -6,6 +6,7 @@ import asyncio
 import copy
 import inspect
 import json
+import logging
 import os
 import re
 import time
@@ -13,12 +14,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable, Literal
 from uuid import uuid4
+from urllib.parse import urlsplit
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from frontend_api import APIError
+from detector import GraphDetector
 from frontend_live import saved_snapshots
 from investigation_store import ActiveInvestigation, InvestigationStore, RequestConflict
 from nightwatch_agent.graph import GraphAPI
@@ -28,6 +31,7 @@ from nightwatch_agent.prompts import tool_description
 
 Json = dict[str, Any]
 SCHEMAS = Path(__file__).resolve().parents[2] / "contracts" / "schemas"
+LOG = logging.getLogger(__name__)
 
 
 class InvestigationAPIError(APIError):
@@ -169,6 +173,10 @@ class InvestigationManager:
         self._stopping = False
         self._started = False
         self._clients: list[Any] = []
+        self._detector = GraphDetector()
+        # Operator-selected previews/history and mock UI mode are never inputs
+        # to automatic model calls. Manual investigation behavior is unchanged.
+        self._detection_enabled = not urlsplit(self.graph_url).query and os.getenv("NIGHTWATCH_MOCK_DATA") != "1"
 
     def _default_model(self):
         from openai import AsyncOpenAI
@@ -232,6 +240,50 @@ class InvestigationManager:
             self.graph_error = None
         except Exception as error:
             self.graph_error = safe_error(error)
+            self._detector.reset()
+            return
+        if self._detection_enabled and not self._stopping:
+            try:
+                await self._detect_graph()
+            except Exception:
+                self._detector.reset()
+                LOG.exception("Automatic investigation detection failed; retrying next graph refresh")
+
+    async def _detect_graph(self) -> None:
+        detection = self.store.current_detection(self.graph_url)
+        fresh, payload, recovered = self._detector.observe(
+            self.graph, detection["payload"]["node_ids"] if detection else None)
+        if not fresh:
+            return
+        if detection is not None:
+            if recovered and self.store.state_base()["active_investigation_id"] is None:
+                self.store.release_detection(detection["request_id"])
+                self._detector.reset()
+                LOG.info("Automatic investigation rearmed after three healthy snapshots: %s", detection["request_id"])
+                return
+            if detection["investigation_id"] is not None:
+                return
+            # A detection waiting behind a manual investigation, or interrupted
+            # before admission, must still be abnormal in the current graph.
+            if not any(node["id"] in detection["payload"]["node_ids"] and
+                       node["status"] in {"warning", "failing"} for node in self.graph["nodes"]):
+                return
+        elif payload is not None:
+            request_id = "detector-" + uuid4().hex
+            self.store.latch_detection(self.graph_url, request_id, payload)
+            detection = {"request_id": request_id, "payload": payload}
+            self._detector.reset()
+            LOG.info("Automatic investigation latched: %s; %s", request_id, payload["reason"])
+        else:
+            return
+        trigger = {"source": "detector", "reason": detection["payload"]["reason"]}
+        body = {"request_id": detection["request_id"], "trigger": trigger}
+        try:
+            await self.create(detection["request_id"], body, trigger)
+        except InvestigationAPIError as error:
+            if error.body["error"]["code"] != "investigation_active":
+                raise
+            # The durable latch remains pending; no second queue/worker exists.
 
     def state(self) -> Json:
         base = self.store.state_base()
@@ -262,6 +314,19 @@ class InvestigationManager:
         try:
             data = self.graph_factory()
             await data.prepare()
+            detection = self.store.detection_context(investigation_id)
+            if detection is not None:
+                data.opening = copy.deepcopy(data.opening)
+                data.opening["trigger"] = {"source": "detector", "reason": detection["reason"]}
+                data.opening["detection"] = detection
+                data.opening["data_scope"] = data.opening["data_scope"].replace(
+                    "No incident has been detected by this runner. ",
+                    "The backend detected repeated abnormal monitor status; detection is a symptom, not a root-cause conclusion. ")
+                data.opening["task"] = (
+                    "Investigate the supplied detection and its saved snapshot. Compare current and retained "
+                    "snapshots around detected_at, prioritizing node_ids. The supplied detection is context, "
+                    "not a tool evidence ID; obtain tool evidence before citing conclusions. Explain observed "
+                    "changes, hypotheses, counterevidence, limitations and the next evidence needed.")
             model = self.model_factory()
             if inspect.isawaitable(model):
                 model = await model
