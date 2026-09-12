@@ -8,10 +8,11 @@ from pathlib import Path
 from typing import Literal
 
 import uvicorn
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 from logs import LogHub, create_log_router
 from graph_state import GraphStore
+from graph_history import TIMESTAMP_PATTERN, parse_timestamp
 
 from frontend_api import install_frontend
 from investigation_api import install_investigations
@@ -64,7 +65,7 @@ class Sources(BaseModel):
 class Graph(BaseModel):
     schema_version: Literal["nightwatch.snapshot.v2"] = "nightwatch.snapshot.v2"
     seq: int = 1
-    at: str = "2026-09-12T00:00:00Z"
+    at: str = "2026-09-12T08:00:00+08:00"
     nodes: list[Node]
     edges: list[Edge]
     sources: Sources = Field(default_factory=Sources)
@@ -125,6 +126,7 @@ async def lifespan(app):
     log_hub.store = store
     logs, cursor = store.read_file()
     store.commit(logs, cursor)
+    store.history.save(store.snapshot)
 
     async def follow_logs():
         while True:
@@ -136,13 +138,23 @@ async def lifespan(app):
                 # Keep the previous snapshot/cursor so the next tick retries the batch.
                 logging.getLogger(__name__).exception("Graph snapshot update failed")
 
-    task = asyncio.create_task(follow_logs())
+    async def archive_snapshots():
+        while True:
+            await asyncio.sleep(store.config.history.interval_seconds)
+            try:
+                store.history.save(store.snapshot)
+            except Exception:
+                logging.getLogger(__name__).exception("Graph history archive failed; retrying next interval")
+
+    tasks = [asyncio.create_task(follow_logs()), asyncio.create_task(archive_snapshots())]
     try:
         yield
     finally:
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with suppress(asyncio.CancelledError):
+                await task
         log_hub.store = None
 
 
@@ -156,13 +168,46 @@ log_hub = LogHub()
 app.include_router(create_log_router(log_hub, include_events=False))
 
 
-@app.get("/api/graph", response_model=Graph, summary="Get current monitor graph snapshot")
-def get_graph(
+class SnapshotEntry(BaseModel):
+    seq: int
+    at: str
+
+
+class SnapshotPage(BaseModel):
+    snapshots: list[SnapshotEntry]
+    next_before_seq: int | None
+
+
+@app.get("/api/graph/snapshots", response_model=SnapshotPage, summary="List retained graph snapshots, newest first")
+async def list_graph_snapshots(
+    limit: int = Query(default=100, ge=1, le=500),
+    before_seq: int | None = Query(default=None, ge=1),
+):
+    return app.state.graph_store.history.list_snapshots(limit, before_seq)
+
+
+@app.get("/api/graph", response_model=Graph, summary="Get current or historical monitor graph snapshot")
+async def get_graph(
     state: Literal["normal", "problem"] | None = Query(
         default=None, description="Optional explicit dummy preview; omitted returns the live snapshot."
     ),
+    timestamp: str | None = Query(
+        default=None, pattern=TIMESTAMP_PATTERN,
+        description="RFC3339 with timezone, e.g. 2026-09-12T13:00:00+08:00. Return the last archived snapshot at or before this time.",
+    ),
 ) -> Graph:
-    """Read the committed snapshot; preview requests do not modify it."""
+    """Read stored graph content without recomputing historical state."""
+    if timestamp is not None:
+        if state is not None:
+            raise HTTPException(422, detail="timestamp and state cannot be combined")
+        try:
+            requested = parse_timestamp(timestamp)
+        except ValueError as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+        snapshot = app.state.graph_store.history.at_or_before(requested)
+        if snapshot is None:
+            raise HTTPException(404, detail={"code": "snapshot_not_found", "message": "沒有不晚於指定時間的保留快照"})
+        return Graph.model_validate(snapshot)
     return dummy_graph(state) if state is not None else Graph.model_validate(app.state.graph_store.snapshot)
 
 

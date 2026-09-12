@@ -1,17 +1,17 @@
 """Config topology + monitor logs, with one atomic file checkpoint (single worker)."""
 from collections import OrderedDict
-from datetime import datetime, timezone
+from datetime import datetime
 import json
 import logging
 import math
 import os
 from pathlib import Path
-import tempfile
 from typing import Literal
 
 from pydantic import Field, model_validator
 
 from logs import ConsoleLog, Identifier, StrictModel
+from graph_history import GraphHistory, HistoryConfig, TAIPEI, write_json_atomic
 
 LOG = logging.getLogger(__name__)
 CAPACITY = 10000
@@ -34,6 +34,7 @@ class GraphConfig(StrictModel):
     monitor_log: Identifier
     snapshot_path: Identifier
     window_seconds: int = Field(default=60, ge=1)
+    history: HistoryConfig = Field(default_factory=HistoryConfig)
     monitors: list[MonitorDefinition] = Field(min_length=1)
     edges: list[Connection]
 
@@ -87,16 +88,21 @@ class GraphStore:
         self.path = (config_path.parent / self.config.snapshot_path).resolve()
         if self.path in (self.log_path, config_path):
             raise ValueError("snapshot_path must differ from config and monitor_log")
+        history_path = (config_path.parent / self.config.history.directory).resolve()
+        if any(path == history_path or history_path in path.parents
+               for path in (self.path, self.log_path, config_path)):
+            raise ValueError("history directory must be separate from config, checkpoint and monitor log")
+        self.history = GraphHistory(history_path, self.config.history)
         self.monitors = {m.monitor_id: m for m in self.config.monitors}
         self.recent = OrderedDict()
         self.cursor = {"path": str(self.log_path), "identity": None, "offset": 0}
-        self.seq = 0
+        self.seq = self.history.max_seq
         self.snapshot = None
         if self.path.exists():
             saved = json.loads(self.path.read_text())
             if saved["version"] != 1:
                 raise ValueError("unsupported graph checkpoint version")
-            self.seq = saved["snapshot"]["seq"]
+            self.seq = max(self.seq, saved["snapshot"]["seq"])
             for raw in saved["recent_logs"][-CAPACITY:]:
                 payload = console_payload(raw)
                 self.recent[(payload["monitor_id"], payload["event_id"])] = payload
@@ -105,7 +111,7 @@ class GraphStore:
         self.commit([], self.cursor)
 
     def project(self, recent, seq):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(TAIPEI)
         cutoff = now.timestamp() - self.config.window_seconds
         nodes = []
         for monitor in self.config.monitors:
@@ -133,7 +139,7 @@ class GraphStore:
         age = max(0, now.timestamp() - max(timestamp(log["occurred_at"]) for log in known_logs)) if known_logs else 0
         return {
             "schema_version": "nightwatch.snapshot.v2", "seq": seq,
-            "at": now.isoformat().replace("+00:00", "Z"), "nodes": nodes,
+            "at": now.isoformat(), "nodes": nodes,
             "edges": [{"from": self.monitors[e.source].node_id, "to": self.monitors[e.to].node_id,
                        "kind": e.kind, "rps": None, "errors": None, "p95_ms": None,
                        "observed": False} for e in self.config.edges],
@@ -160,18 +166,7 @@ class GraphStore:
         snapshot = self.project(recent, self.seq + 1)
         cursor = cursor if cursor is not None else self.cursor
         saved = {"version": 1, "snapshot": snapshot, "recent_logs": list(recent.values()), "file_cursor": cursor}
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = None
-        try:
-            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent, delete=False) as stream:
-                temporary = Path(stream.name)
-                json.dump(saved, stream, ensure_ascii=False, allow_nan=False)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, self.path)
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
+        write_json_atomic(self.path, saved)
         self.recent, self.cursor, self.snapshot = recent, cursor, snapshot
         self.seq = snapshot["seq"]
         return fresh

@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Path as ApiPath, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from monitor import MonitorConfig, monitor
+from monitor import MonitorConfig, install_logging, monitor
 
 from .demo_faults import (
     DemoFaultConflictError,
@@ -171,6 +171,7 @@ class DemoFaultsResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     configure_logging()
+    install_logging(logger)
     try:
         logger.info("application startup")
         logger.info("database migration started")
@@ -506,7 +507,7 @@ def _order_lines_from_items(
 
 
 @app.get("/api/health")
-@monitor(MonitorConfig(name="GET /api/health", monitor_id="shop.health"))
+@monitor(MonitorConfig(name="GET /api/health", monitor_id="shop.health", level="WARNING"))
 def health():
     with connect() as db:
         _query(db, "SELECT 1 FROM orders LIMIT 1")
@@ -514,7 +515,7 @@ def health():
 
 
 @app.get("/api/products", response_model=list[ProductResponse])
-@monitor(MonitorConfig(name="GET /api/products", monitor_id="shop.products"))
+@monitor(MonitorConfig(name="GET /api/products", monitor_id="shop.products", level="WARNING"))
 def products():
     with connect() as db:
         rows = _query(db,
@@ -523,7 +524,7 @@ def products():
     return [_product_payload(row) for row in rows]
 
 
-@monitor(MonitorConfig(name="shop database query", monitor_id="shop.db.query"))
+@monitor(MonitorConfig(name="shop database query", monitor_id="shop.db.query", level="WARNING"))
 def _query(db: sqlite3.Connection, sql: str):
     return db.execute(sql).fetchall()
 

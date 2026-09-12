@@ -8,7 +8,8 @@
     "seq": { "type": "integer" },
     "at": {
       "type": "string",
-      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+      "description": "RFC3339 timestamp; Guard Room emits Taiwan time (+08:00), legacy UTC (Z) remains valid.",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|\\+08:00)$"
     },
     "t": { "type": "integer" },
     "nodes": {

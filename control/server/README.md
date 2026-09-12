@@ -35,10 +35,15 @@ uv run uvicorn main:app --reload --host 127.0.0.1 --port 8001
 [Guard Room README](../../guardroom/README.md)。僅支援單一 worker。
 
 - GET /api/graph：最新 monitor graph。
+- GET /api/graph/snapshots?limit=100&before_seq=120：歷史快照索引與分頁。
+- GET /api/graph?timestamp=...：不晚於指定時間的最後一份歷史 graph；timestamp 需帶時區。
 - GET /api/graph?state=normal|problem：dummy 預覽。
 - POST /api/logs：接收並持久化 log、更新 graph。
 - GET /events：即時 SSE log。
 - /docs、/openapi.json：API 文件。
+
+Graph 時間以台灣時間 `+08:00` 輸出；歷史預設每 5 秒保存、保留 15 分鐘，
+可在 config 的 history 設定。原始 monitor log 繼續使用 UTC。
 
 其他前端 API 見 [前端 API 文件](../FRONTEND-API.md)，其 mock 預設關閉，
 可用 `NIGHTWATCH_MOCK_DATA=1` 啟用；live graph 尚未接入 /api/state 與 SSE graph。
