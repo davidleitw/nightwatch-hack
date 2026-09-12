@@ -32,7 +32,7 @@
 
 我們從一間真的能瀏覽商品、保存購物車與建立訂單的本機商店開始。Python Monitor 收集函式執行事件；Guard Room 將事件整理成服務圖與歷史快照；AI Agent 讀取圖、節點與近期日誌，交付結構化報告。Console 讓人追蹤調查進度，回看事件與模型對話。
 
-**最終願景：從發現問題，一路走到經人批准、可驗證的修復。** 目前已實作的是監測、調查與報告；真實修復執行與修復後驗證仍是未來工作。
+**最終願景：從發現問題，一路走到經人批准、可驗證的修復。** 目前已實作監測、調查與報告；另可明確啟用本機演練故障解除與 health 查詢。通用修復、人工批准及可信的修復後驗證仍是未來工作。
 
 ### 值得打開它的四個理由
 
@@ -45,7 +45,7 @@
 
 依 [2026-09-12 對接盤點](docs/readme/integration-status.md)，目前已串起「店面請求 → 部分 Monitor → Guard Room → 調查／報告」。自動偵測會在同一節點連續三次出現符合新鮮度條件的 `warning`／`failing` 時觸發調查；也可手動建立。
 
-**監測尚未覆蓋拆分後的所有服務，因此店面的每張故障卡不保證會觸發調查。** Console 尚無批准修復入口，control 也尚未接到真實修復操作。看到調查報告或 mock 的 recovered 狀態，都不代表服務已被修好。
+**監測尚未覆蓋拆分後的所有服務，因此店面的每張故障卡不保證會觸發調查。** Console 尚無批准修復入口；設定 `NIGHTWATCH_SHOP_URL` 後，Agent 可解除指定本機店面的演練故障，但這不等於業務恢復。看到調查報告或 mock 的 recovered 狀態，都不代表服務已被修好。
 
 ## English
 
@@ -55,7 +55,7 @@ Checkout slows down. Errors climb. Logs live in different services. NightWatch a
 
 The playground is a working local storefront with products, persistent carts, and orders. Python Monitor captures function events. Guard Room turns them into a service graph and historical snapshots. An AI agent inspects the graph, nodes, and recent logs to produce a structured report. The Console lets people follow investigations and revisit events and model conversations.
 
-**Our destination: a path from detection to human-approved, verifiable recovery.** Monitoring, investigation, and reporting are implemented today. Real repair execution and post-repair verification remain future work.
+**Our destination: a path from detection to human-approved, verifiable recovery.** Monitoring, investigation, and reporting are implemented today. Local demo-fault deactivation and health queries can be explicitly enabled; general repair, approval, and trustworthy recovery verification remain future work.
 
 - **A real playground.** Gateway, catalog, cart, and order services persist data in SQLite. Three fault scenarios exercise checkout exceptions, database write locks, and latency.
 - **Evidence you can inspect.** Agent tools read graphs, historical snapshots, node details, and recent logs. Reports capture findings, hypotheses, limitations, and next steps, with node and evidence ID validation.
@@ -64,7 +64,7 @@ The playground is a working local storefront with products, persistent carts, an
 
 The [2026-09-12 integration audit](docs/readme/integration-status.md) documents the current path: storefront requests → partial monitoring → Guard Room → investigation/report. Automatic detection requires three consecutive fresh `warning`/`failing` observations for a node; investigations can also be started manually.
 
-**Monitoring does not yet cover every split service, so a storefront fault is not guaranteed to trigger an investigation.** The Console has no repair approval flow, and control has no connected repair actuator. A report—or a mock recovered state—is not proof of recovery.
+**Monitoring does not yet cover every split service, so a storefront fault is not guaranteed to trigger an investigation.** The Console has no repair approval flow. With `NIGHTWATCH_SHOP_URL` configured, the agent can deactivate faults in the designated local demo storefront; this does not establish business recovery. A report—or a mock recovered state—is not proof of recovery.
 
 ## Architecture
 
@@ -198,9 +198,9 @@ Repeat the same `request_id` and payload to retrieve the same investigation. Use
 
 External clients use the gateway on `:8000` or the Nginx `/api/` proxy on `:8080`. Catalog, cart, and order stay inside the Compose network. See the [storefront API contract](shop-web/docs/API.md) for products, carts, checkout, and `Idempotency-Key` behavior.
 
-故障卡使用商店的 **`GET/POST/DELETE /api/demo-faults`**，目前尚未與 control 的 `/api/faults*` 接通。後者及舊批准操作在 live 模式回 `503`。請勿將兩套端點視為可互換。
+故障卡使用商店的 **`GET/POST/DELETE /api/demo-faults`**。設定 `NIGHTWATCH_SHOP_URL` 後，Agent 可透過 `get_demo_faults`、`deactivate_demo_fault`、`check_shop_health` 查詢及解除本機演練故障，詳見 [演練修復邊界](control/SYSTEM_DESIGN.md)。舊 control `/api/faults*` 及批准操作在 live 模式仍回 `503`，兩套端點不可互換。
 
-Fault cards use the storefront's **`GET/POST/DELETE /api/demo-faults`**. These are not yet connected to control's `/api/faults*` APIs, which return `503` in live mode, as do legacy approval operations. The two interfaces are not interchangeable.
+Fault cards use the storefront's **`GET/POST/DELETE /api/demo-faults`**. Setting `NIGHTWATCH_SHOP_URL` enables `get_demo_faults`, `deactivate_demo_fault`, and `check_shop_health` for the designated local demo. See the [demo repair boundaries](control/SYSTEM_DESIGN.md). Legacy control `/api/faults*` and approval operations still return `503` in live mode; the interfaces are not interchangeable.
 
 ## Roadmap
 
@@ -211,7 +211,7 @@ These proposed priorities follow the current integration gaps. They are future w
 | 優先 / Priority | 下一步 / Next step | 完成後的價值 / Outcome |
 | --- | --- | --- |
 | 1 | 對齊 catalog／cart／order 的 Monitor 與圖設定 / Align instrumentation and graph mappings | 故障可對應到實際受影響服務 / Relate faults to the services they affect |
-| 2 | 串接 control 與商店故障控制 / Connect control to storefront fault operations | 演練有真實操作、狀態與解除流程 / Real fault lifecycle and restoration controls |
+| 2 | 完善演練故障控制的並行操作與生命週期 / Harden concurrent demo-fault operations and lifecycle | 補足已接通的本機解除工具之操作限制 / Strengthen the existing local deactivation tools |
 | 3 | 人工批准、修復執行、修復後觀測窗口 / Add approval, repair execution, and an observation window | 用證據確認修復成效 / Verify recovery with evidence |
 | 4 | 補齊基線、指標、trace 與獨立 health probe / Add baselines, metrics, traces, and independent probes | 讓調查取得更完整的觀測資料 / Give investigations more complete observations |
 | 5 | 全歷史日誌查詢、完整實驗稽核與 Console 匯出入口 / Add historical log search, experiment audits, and Console export | 更完整地回看與分享事故 / Revisit and share incidents with fuller context |
@@ -231,9 +231,12 @@ Want to contribute? Pick a gap from the [integration audit](docs/readme/integrat
 | [guardroom/](guardroom/README.md) | 本機啟動與監測映射設定 / Local startup and monitor mappings |
 | [console/](console/README.md) | 真實調查工作區與明確選用的錄影 / Live workspace and opt-in recordings |
 | [Integration status](docs/readme/integration-status.md) | 真實對接、mock 與限制的詳細盤點 / Detailed live integration, mock, and limitation audit |
+| [INTEGRATION.md](INTEGRATION.md) | 主線保留的原始盤點紀錄 / Original integration audit retained on master |
+| `contracts/schemas/`、`contracts/fixtures/` | 程式仍載入的 schema 與離線錄影；舊架構說明已移除 / Runtime schemas and recordings; obsolete architecture documents removed |
+| `gate/` | PR 與 harness 工具，獨立於網站執行流程 / PR and harness tools, separate from application runtime |
 
-`gate/` 及根目錄的 `task.sh`、`run-task.sh`、`setup.sh`、`hackathon.conf` 是既有協作工具，並非服務啟動入口。
+`gate/` 及根目錄的 `task.sh`、`run-task.sh`、`setup.sh`、`hackathon.conf` 是既有協作工具，並非服務啟動入口；舊編號任務資料已移除。
 
-`gate/` and the root `task.sh`, `run-task.sh`, `setup.sh`, and `hackathon.conf` support the existing collaboration workflow; they are not service startup entry points.
+`gate/` and the root `task.sh`, `run-task.sh`, `setup.sh`, and `hackathon.conf` support the existing collaboration workflow; they are not service startup entry points. Legacy numbered task materials have been removed.
 
 <p align="center"><strong>從看見異常，到理解原因。<br>From signals to understanding.</strong></p>

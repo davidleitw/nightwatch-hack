@@ -2,9 +2,13 @@
 
 Snapshot: 2026-09-12. This document summarizes the existing local integration audit and component documentation. It is a documentation baseline, not a new end-to-end test result. 本文件整理既有本機盤點與元件說明，代表文件基準，不是這次重新執行的端到端驗證。
 
-The source audit is the local `INTEGRATION.md` at commit `181944c`. Its broader cleanup is separate from this README change. That commit was not on GitHub `master` when this documentation was prepared, so this summary is included here to keep the README's links self-contained.
+The source audit is [INTEGRATION.md](../../INTEGRATION.md), originally recorded in `181944c` and now included on master through MR #27. The tables below retain that audit baseline. MR #27 additionally introduced opt-in local demo-fault tools, so its repair updates below supersede the older absence-of-repair statements.
 
-來源是本機提交 `181944c` 的 `INTEGRATION.md`；其中的大批清理屬於另一項工作。撰寫時該提交尚未在 GitHub `master`，因此另存此摘要，讓 README 的對接說明不依賴未推送的文件。
+來源是 [INTEGRATION.md](../../INTEGRATION.md)，最初記錄於 `181944c`，現已隨 MR #27 納入主線。下表保留當時的盤點基準；MR #27 另加入可明確啟用的本機演練故障工具，因此以下更新取代舊盤點中完全沒有修復接線的敘述。
+
+設定 `NIGHTWATCH_SHOP_URL` 後，Agent 可使用 `get_demo_faults`、`deactivate_demo_fault` 與 `check_shop_health`，限指定本機店面的演練操作；通用修復、人工批准與可信恢復驗證仍未完成。解除故障不等於成功結帳或服務恢復，完整限制見 [SYSTEM_DESIGN.md](../../control/SYSTEM_DESIGN.md)。
+
+With `NIGHTWATCH_SHOP_URL` configured, the agent can inspect/deactivate demo faults and query health in the designated local storefront. General repair, approval, and trustworthy recovery verification remain incomplete. Clearing a fault does not prove successful checkout or service recovery; see [SYSTEM_DESIGN.md](../../control/SYSTEM_DESIGN.md).
 
 ## Available / 已有實作
 
@@ -23,8 +27,8 @@ The source audit is the local `INTEGRATION.md` at commit `181944c`. Its broader 
 | Gap / 缺口 | Consequence / 影響 |
 | --- | --- |
 | Graph coverage / 圖覆蓋 | Config still maps `shop.db.query`, which the current storefront does not emit; `shop.order.health` has no node mapping. Catalog/cart and checkout need aligned instrumentation. 店面故障不保證能被目前節點觀察到。 |
-| Fault control / 故障控制 | Control does not call the storefront fault API. Console's proxy permits investigation creation but not fault-control POSTs. 兩套故障介面尚未串接。 |
-| Repair / 修復 | No live repair actuator, approval-to-execution flow, post-repair observation window, or trusted recovery baseline. 沒有真實修復與成效驗證閉環。 |
+| Fault control / 故障控制 | Legacy control fault routes remain unavailable; opt-in agent demo-fault tools are connected. Console's proxy permits investigation creation but not fault-control POSTs. Agent 可明確啟用本機解除，舊故障介面仍未串接。 |
+| Repair / 修復 | Local demo-fault deactivation is available when explicitly enabled; no general actuator, approval-to-execution flow, post-repair observation window, or trusted recovery baseline. 可解除本機演練故障，尚無通用修復與成效驗證閉環。 |
 | Measurements / 量測 | No connected Prometheus/Jaeger or independent health probe. `saturation=null`; edge measurements are `null` with `observed=false`. `alive` means monitor events occurred in the window. 缺失量測不是零，沒有事件不代表服務已死。 |
 | Readiness / 就緒狀態 | Legacy readiness/capabilities do not describe all working investigation tools. `ready=false` and `model.available=false` are not sufficient to diagnose model availability. 不能只靠這些旗標判斷模型一定不可用。 |
 | Log history / 日誌歷史 | `search_logs` filters a bounded recent batch, not a complete historical archive. 查無資料不能推論沒有故障。 |

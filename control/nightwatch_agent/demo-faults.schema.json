@@ -1,0 +1,95 @@
+{
+  "properties": {
+    "cards": {
+      "items": {
+        "properties": {
+          "fault_id": {
+            "type": "string",
+            "title": "Fault Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "fault_id",
+          "title",
+          "description"
+        ],
+        "title": "DemoFaultCard"
+      },
+      "type": "array",
+      "title": "Cards"
+    },
+    "active": {
+      "anyOf": [
+        {
+          "properties": {
+            "fault_id": {
+              "type": "string",
+              "title": "Fault Id"
+            },
+            "started_at": {
+              "type": "string",
+              "title": "Started At"
+            },
+            "expires_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expires At"
+            },
+            "remaining_seconds": {
+              "type": "number",
+              "title": "Remaining Seconds"
+            },
+            "status": {
+              "type": "string",
+              "title": "Status"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "fault_id",
+            "started_at",
+            "remaining_seconds",
+            "status"
+          ],
+          "title": "DemoFaultActive"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "lease_seconds": {
+      "type": "integer",
+      "title": "Lease Seconds"
+    },
+    "delay_seconds": {
+      "type": "integer",
+      "title": "Delay Seconds"
+    }
+  },
+  "additionalProperties": false,
+  "type": "object",
+  "required": [
+    "cards",
+    "lease_seconds",
+    "delay_seconds"
+  ],
+  "title": "DemoFaultsResponse"
+}

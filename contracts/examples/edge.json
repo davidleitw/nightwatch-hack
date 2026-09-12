@@ -1,9 +1,0 @@
-{
-  "from": "checkout",
-  "to": "catalog",
-  "kind": "calls",
-  "rps": 12.2,
-  "errors": 0.032,
-  "p95_ms": 1200,
-  "observed": true
-}
