@@ -231,7 +231,7 @@ function acceptGraph(value, receivedAt = null) {
   if (!viewingHistory) { graph = value; graphReceivedAt = receivedAt; renderGraph(); }
 }
 function acceptState(value, options = {}) {
-  const previous = activeId();
+  const previous = activeId(), previousUsage = usageId();
   if (!store.acceptState(value, options)) return;
   if (options.acceptGraph !== false && value.graph !== null) acceptGraph(value.graph, value.graph_received_at);
   error('graph', value.graph_error ? `服務拓樸來源：${value.graph_error}。保留最後取得的快照。` : value.graph === null ? '目前沒有可用的服務拓樸。調查歷史仍可讀取。' : null);
@@ -239,13 +239,12 @@ function acceptState(value, options = {}) {
   updateStartButton(); renderCurrent();
   if (activeId()) {
     if (previous !== activeId() || !store.events.has(activeId())) void loadEvents(activeId());
-    if (previous !== activeId() || !details.has(activeId())) void loadDetail(activeId(), false);
   }
   const shown = currentChatId();
   if (shown && shown !== activeId()) {
     if (!store.events.has(shown)) void loadEvents(shown);
-    if (!details.has(shown)) void loadDetail(shown, false);
   }
+  if (usageId() && (previous !== activeId() || previousUsage !== usageId() || !details.has(usageId()))) void loadUsage();
   if (previous !== activeId()) void loadHistory();
   renderUsagePage();
 }
@@ -397,22 +396,18 @@ function normalizedUsage(usage) {
   return {...usage, cached_tokens: usage.cache_read_tokens !== undefined ? usage.cache_read_tokens : usage.cached_tokens, calls: usage.requests !== undefined ? usage.requests : usage.calls};
 }
 function usageStrip(usage) {
-  const u = readUsage(normalizedUsage(usage));
-  const tools = Number.isSafeInteger(usage?.tool_calls) && usage.tool_calls >= 0 ? usage.tool_calls : null;
-  if (usage?.tool_calls !== undefined && tools === null) u.problems.push('tool_calls 必須是非負安全整數。');
-  return `<div class="usage-strip"><span title="輸入與輸出 token 加總">${icon('token')}<span>Token <strong>${number(u.total)}</strong></span></span><span title="快取讀取占輸入 token 比例">${icon('cache')}<span>Cache <strong>${number(u.rate, '%', 100)}</strong></span></span><span title="模型請求次數">${icon('pulse')}<span>請求 <strong>${number(u.calls)}</strong></span></span><span title="後端工具用量，不含 submit_report 報告提交">${icon('tool')}<span>工具 <strong>${number(tools)}</strong></span></span></div>${u.problems.length ? `<p class="failing usage-strip-error">${esc(u.problems.join(' '))}</p>` : ''}`;
+  const {u, tools, problems} = usageViewData(null, usage);
+  return `<div class="usage-strip"><span title="輸入與輸出 token 加總">${icon('token')}<span>Token <strong>${number(u.total)}</strong></span></span><span title="快取讀取占輸入 token 比例">${icon('cache')}<span>Cache <strong>${number(u.rate, '%', 100)}</strong></span></span><span title="模型請求次數">${icon('pulse')}<span>請求 <strong>${number(u.calls)}</strong></span></span><span title="後端工具用量，不含 submit_report 報告提交">${icon('tool')}<span>工具 <strong>${number(tools)}</strong></span></span></div>${problems.length ? `<p class="failing usage-strip-error">${esc(problems.join(' '))}</p>` : ''}`;
 }
 function usageFor(id) {
   const detail = details.get(id);
   const latest = store.activity(id).findLast(e => e.type === 'agent.usage');
-  return latest && latest.seq > (detail?.event_seq ?? -1) ? latest.payload.usage : detail?.usage ?? latest?.payload.usage;
+  return latest && latest.seq > (detail?.event_seq ?? -1) ? latest.payload.usage : detail?.usage ?? latest?.payload.usage ?? (id === activeId() ? activeSummary()?.usage : undefined);
 }
-function renderUsage(usage) { $('agent-usage').innerHTML = usageStrip(usage); }
+function renderUsage() { $('agent-usage').innerHTML = usageStrip(usageFor(usageId())); }
 function usageId() { return activeId() || store.state?.last_completed_investigation_id; }
-function renderUsagePage() {
-  const view = $('usage-view');
-  if (view.hidden) return;
-  const id = usageId(), detail = details.get(id), usage = usageFor(id);
+function usageViewData(id = usageId(), usage = usageFor(id)) {
+  const detail = details.get(id);
   const u = readUsage(normalizedUsage(usage));
   const problems = u.problems.map(message => message.replaceAll('cached_tokens', usage?.cache_read_tokens !== undefined ? 'cache_read_tokens' : 'cached_tokens').replaceAll('calls', usage?.requests !== undefined ? 'requests' : 'calls'));
   const extra = key => {
@@ -423,7 +418,13 @@ function renderUsagePage() {
   };
   const writes = extra('cache_write_tokens'), tools = extra('tool_calls');
   const reported = [u.input_tokens, u.output_tokens, u.cached_tokens, u.calls, writes, tools].some(value => value !== null);
-  const stateLabel = !store.state ? '等待調查狀態' : !id ? '尚無調查' : !detail ? '尚未取得用量' : problems.length ? '資料異常' : reported ? '已回報' : '尚未回報';
+  const stateLabel = !store.state ? '等待調查狀態' : !id ? '尚無調查' : !detail && usage == null ? '尚未取得用量' : problems.length ? '資料異常' : reported ? '已回報' : '尚未回報';
+  return {id, usage, u, problems, writes, tools, reported, stateLabel};
+}
+function renderUsagePage() {
+  const view = $('usage-view');
+  if (view.hidden) return;
+  const {id, usage, u, problems, writes, tools, reported, stateLabel} = usageViewData();
   const expanded = view.querySelector('details')?.open;
   const trend = (title, unit) => `<article class="usage-view-chart"><div class="usage-view-chart-heading"><h2>${title}</h2><span>${unit}</span></div><div class="usage-view-chart-empty"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true"><path d="M4 4v16h16"/><circle cx="14" cy="10" r="5"/><path d="M14 7v3l2 1"/></svg><strong>尚無趨勢資料</strong><p>目前只有調查累計值，尚無各時間點的用量。</p></div></article>`;
   view.innerHTML = `<div class="usage-view-context"><div><span class="usage-view-kicker">${activeId() ? '進行中的調查' : '最近一次調查'}</span><p>${id ? esc(id) : '開始調查後，這裡會顯示 Agent 的用量。'}</p></div><div class="usage-view-context-actions"><span class="usage-view-status ${problems.length ? 'usage-view-invalid' : ''}">${stateLabel}</span>${id ? `<a href="#investigations/${encodeURIComponent(id)}">查看調查 →</a>` : ''}<a href="#topology">返回服務拓樸 →</a></div></div>
@@ -436,17 +437,19 @@ function renderUsagePage() {
     ${problems.length ? `<p class="usage-view-error" role="alert">${esc(problems.join(' '))}</p>` : !reported ? '<p class="usage-view-note">尚未取得用量數字；「—」不代表 0。若讀取失敗，請查看上方錯誤並按「更新資料」。</p>' : ''}
     <div class="usage-view-section-title"><h2>用量趨勢</h2><span>本次調查</span></div><div class="usage-view-charts">${trend('Token 使用量', 'tokens')}${trend('Prompt cache 命中率', '%')}</div>
     <section class="usage-view-breakdown"><div class="usage-view-section-title"><h2>Token 明細</h2><span>後端累計</span></div><dl><div><dt>輸入 token</dt><dd>${number(u.input_tokens)}</dd></div><div><dt>輸出 token</dt><dd>${number(u.output_tokens)}</dd></div><div><dt>其中快取讀取</dt><dd>${number(u.cached_tokens)}</dd></div><div><dt>快取寫入</dt><dd>${number(writes)}</dd></div></dl><p class="usage-view-note">快取讀取包含於輸入，總量不重複加總。命中率代表輸入 token 的快取比例，與回答正確率無關。</p></section>
-    <details class="usage-view-raw" ${expanded ? 'open' : ''}><summary>統計口徑與原始值</summary><p>範圍為上方這次調查，不代表帳號總用量。總 token = input_tokens + output_tokens。Prompt cache 命中率 = 快取讀取 ÷ input_tokens × 100%。未回報欄位顯示「—」，實際回報 0 才顯示 0。</p><p>數字以最近一次取得的調查詳情為準，可按「更新資料」重新讀取。</p>${raw(usage)}</details>`;
+    <details class="usage-view-raw" ${expanded ? 'open' : ''}><summary>統計口徑與原始值</summary><p>範圍為上方這次調查，不代表帳號總用量。總 token = input_tokens + output_tokens。Prompt cache 命中率 = 快取讀取 ÷ input_tokens × 100%。未回報欄位顯示「—」，實際回報 0 才顯示 0。</p><p>數字依最新累計用量事件或調查詳情更新，可按「更新資料」重新讀取。</p>${raw(usage)}</details>`;
 }
-let usageLoadingId = null;
-async function loadUsagePage() {
-  if ($('usage-view').hidden) return;
+const usageLoads = new Map();
+async function loadUsage() {
+  renderUsage();
   renderUsagePage();
   const id = usageId();
-  if (!id || id === usageLoadingId) return;
-  usageLoadingId = id;
-  try { await loadDetail(id, false); }
-  finally { if (usageLoadingId === id) usageLoadingId = null; }
+  if (!id) return;
+  if (usageLoads.has(id)) return usageLoads.get(id);
+  const task = loadDetail(id, false);
+  usageLoads.set(id, task);
+  try { await task; }
+  finally { usageLoads.delete(id); }
 }
 function reportHTML(detail, id = detail?.id) {
   const submitted = store.activity(id).findLast(e => e.type === 'report.submitted')?.payload.report;
@@ -474,7 +477,7 @@ function renderCurrent() {
   $('active-phase').textContent = activeId() ? '調查中' : store.state ? '無進行中調查' : '等待狀態';
   $('investigation-phase').innerHTML = summary ? badge(summary) : '';
   $('investigation-summary').innerHTML = id ? `<span class="chat-session-label">${activeId() ? '<i class="live-dot"></i>目前調查' : icon('history') + '最近一次調查'}</span><span class="chat-session-id" title="${esc(id)}">${esc(id)}</span>` : `<span class="chat-session-label">${store.state ? '開始調查，讓 Agent 蒐集證據並產生報告。' : '等待調查狀態…'}</span>`;
-  renderUsage(usageFor(id) ?? activeSummary()?.usage);
+  renderUsage();
   const items = id && journalFilter !== 'monitor' ? activityItems(id, terminal, journalFilter) : [];
   if (journalFilter === 'all' || journalFilter === 'monitor') {
     for (const log of logs.values()) items.push({key: `monitor:${log.monitor_id}:${log.event_id}`, at: log.occurred_at, html: `<article class="chat-message monitor-message"><div class="chat-avatar">${icon('pulse')}</div><div class="chat-message-body"><div class="chat-meta"><strong>Monitor</strong><span>${esc(log.level)}</span><time>${esc(shortTime(log.occurred_at))}</time></div><div class="chat-bubble">${esc(log.message)}</div><div class="journal-links">${log.refs.node_ids.map(node => `<button class="node-link" data-locate-node="${esc(node)}">${esc(node)} ↗</button>`).join('')}</div><details data-preserve="log:${esc(log.monitor_id)}:${esc(log.event_id)}"><summary>原始 log · ${esc(log.monitor_id)}</summary>${raw(log)}</details></div></article>`});
@@ -620,7 +623,7 @@ function route() {
   if (!id) renderHistory();
   if (list && id) { $('page-title').textContent = tab === 'chat' ? '調查對話' : '調查報告'; $('page-description').textContent = '追溯取證過程，閱讀有依據的調查結果。'; }
   if (!list && !usage) renderGraph();
-  if (usage) void loadUsagePage();
+  if (usage) void loadUsage();
 }
 
 async function refresh() {
@@ -634,9 +637,7 @@ async function refresh() {
   } catch (e) { error('state', `調查狀態讀取失敗：${e.message}`); }
   finally { refreshBusy = false; $('refresh').disabled = false; }
   await loadHistory();
-  await loadUsagePage();
-  const current = currentChatId();
-  if (current && current !== selectedHistory) void loadDetail(current, false);
+  await loadUsage();
   if (selectedHistory) { void loadDetail(selectedHistory); void loadEvents(selectedHistory); }
 }
 async function startInvestigation() {
