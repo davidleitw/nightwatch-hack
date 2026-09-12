@@ -24,6 +24,12 @@
 - 新增 `POST /api/carts/{cart_id}/checkout`，以 `{name,address}` 建立訂單並在同一個 transaction 中清空購物車；空 cart 回傳 400。
 - SQLite 使用 `/data/shop.db`；商品只在資料庫第一次初始化時種子一次，重啟不還原已刪除商品，既有 orders 保留商品快照。
 
+### Demo 故障卡
+
+- 新增 `/api/demo-faults` 的 GET/POST/DELETE 控制 API，提供 `checkout_exception`、`database_write_lock`、`checkout_delay` 三張卡；回應包含卡片清單、active 狀態、60 秒 lease 與 10 秒延遲設定。
+- 故障狀態只存在單一 process 記憶體，使用 monotonic TTL 並在 lifespan shutdown 清理；控制 API 為 async，不占用 SQLite route 的 sync threadpool。
+- `checkout_exception` 在真實 order/cart 寫入後於 commit 前 raise 以驗證 rollback；`database_write_lock` 以專用 thread/connection 持有 `BEGIN IMMEDIATE`；`checkout_delay` 以可喚醒的非阻塞等待影響兩個 checkout 入口。
+
 ### uv 依賴與執行環境
 
 - `pyproject.toml` 宣告 Python `>=3.12,<3.13` 與 FastAPI/Uvicorn 直接依賴，`uv.lock` 固定完整依賴樹。
@@ -45,7 +51,8 @@
 ### 驗證紀錄
 
 - `make up COMPOSE=docker-compose` 成功建置並重建兩個 containers，兩者均 healthy；`make test COMPOSE=docker-compose` 的 10 tests 全部通過。
-- `make smoke`、8080 proxy 的商品/購物車/結帳流程與 OpenAPI 9 paths、三個 response schemas 通過；超大 ID 的 GET、cart body/path 與 orders request 均回傳 422。
+- `make smoke`、8080 proxy 的商品/購物車/結帳流程與 OpenAPI 10 paths、三個 response schemas 通過；超大 ID 的 GET、cart body/path 與 orders request 均回傳 422。
 - `uv lock --check` 通過；fresh `uv export --frozen --no-dev --no-hashes` 與 `requirements.txt` 依賴內容一致。runtime 使用 UID 10001 的 `.venv` Uvicorn，`/data`、`/logs` 可由 `app` 寫入。
 - logging 的 UTC ISO/INFO startup、migration、HTTP status/path/duration、INFO/ERROR traceback、每日 rollover 與 restart 後 log volume 保留通過檢查。
-- 尚未執行 browser 自動化與 HTTP 500 error path；破壞性 `make clean CONFIRM=yes` 尚未執行。`make help` 與未帶 `CONFIRM=yes` 的 clean guard 已驗證。
+- isolated backend image 實測 demo fault controls 的 200/422/409、order/cart rollback、checkout delay 10 秒與 DELETE 喚醒、SQLite lock 約 10.18 秒後 500、手動釋放與 log traceback；backend restart 後 fault inactive 且寫入恢復。`checkout_delay` 剩餘約 8.64 秒時的 TTL 自動喚醒已驗證，`database_write_lock` 的 60 秒自動到期尚未單獨驗證。破壞性 `make clean CONFIRM=yes` 尚未執行。`make help` 與未帶 `CONFIRM=yes` 的 clean guard 已驗證。
+- Chrome CDP 已以真實 DOM 驗證事件頁啟用/解除並取得 desktop/mobile 截圖；最終截圖 hash/visual review 尚待核對。

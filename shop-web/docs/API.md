@@ -2,7 +2,7 @@
 
 本文件是 `shop-web` 的 API 契約，欄位與行為以 `backend/app/main.py` 為準，包含商品 CRUD、匿名購物車、既有訂單與購物車結帳。
 
-本機測試與 demo 固定使用 frontend `8080` 與 backend `8000`。API 整合測試、smoke check 與主要商品/購物車/結帳流程已完成；尚未執行 browser 自動化。前端購物袋目前仍使用 `localStorage`，尚未串接新的購物車 API。
+本機測試與 demo 固定使用 frontend `8080` 與 backend `8000`。API 整合測試、smoke check、主要商品/購物車/結帳流程與三張 demo fault 的 backend HTTP 行為已完成；Chrome CDP 也已驗證事件頁真實 DOM 啟用/解除，最終截圖 hash/visual review 尚待核對。前端購物袋目前仍使用 `localStorage`，尚未串接新的購物車 API。
 
 ## Base URL
 
@@ -257,6 +257,33 @@ curl -X POST "$BASE_URL/api/carts/$CART_ID/checkout" \
   }'
 ```
 
+## Demo 故障卡 API
+
+`/api/demo-faults` 控制單一 backend process 內的示範故障，GET、POST、DELETE 的成功 response 格式相同：
+
+```json
+{
+  "cards": [
+    {"fault_id": "checkout_exception", "title": "結帳例外", "description": "..."},
+    {"fault_id": "database_write_lock", "title": "資料庫寫入鎖", "description": "..."},
+    {"fault_id": "checkout_delay", "title": "結帳延遲", "description": "..."}
+  ],
+  "active": null,
+  "lease_seconds": 60,
+  "delay_seconds": 10
+}
+```
+
+`active` 啟用時為 `{fault_id, started_at, expires_at, remaining_seconds, status}`；`status` 可為 `activating`、`active` 或 `restoring`。`started_at` 與 `expires_at` 是 UTC ISO-8601 字串，`remaining_seconds` 由 server 的 monotonic clock 計算。`activating` 尚未取得 database lease，lease 的 60 秒期限會在成功取得後才開始；`restoring` 仍在釋放資源，完成前不能啟用另一張卡。
+
+| Method | Endpoint | Request | 成功回應 | 錯誤 |
+| --- | --- | --- | --- | --- |
+| GET | `/api/demo-faults` | — | 200，故障卡 response | — |
+| POST | `/api/demo-faults` | `{ "fault_id": "checkout_exception" }` | 200，故障卡 response | 未知 ID 或 body 多餘欄位 422；已有 active/activating/restoring 409；database lock 取得失敗 503 |
+| DELETE | `/api/demo-faults` | 無 body | 200，`active: null` | — |
+
+可啟用的 ID 固定為 `checkout_exception`、`database_write_lock`、`checkout_delay`。DELETE 是冪等操作，會喚醒等待中的 checkout；三種 lease 都會在 60 秒後自動清理。`checkout_exception` 會在 order insert 或 cart checkout 的 cart clear 寫入後、commit 前 raise `RuntimeError`，整筆 transaction rollback 並由 request middleware 記錄 traceback；`database_write_lock` 由專用 thread 持有自己的 SQLite connection 與 `BEGIN IMMEDIATE`，一般 checkout 仍使用 SQLite 10 秒 timeout；`checkout_delay` 在 transaction 前非阻塞等待 10 秒。
+
 ## 資料保存與前端整合
 
 - SQLite 預設使用 `/data/shop.db`，由 Compose 的 `shop-data` named volume 保存。
@@ -271,8 +298,8 @@ curl -X POST "$BASE_URL/api/carts/$CART_ID/checkout" \
 - `make up COMPOSE=docker-compose`：成功建置並重建 `frontend`、`backend` 兩個 healthy containers。
 - `make test COMPOSE=docker-compose`：10 tests 全部通過，涵蓋並發加購、並發 checkout、migration、CRUD/validation 與 order snapshot。
 - `make smoke`：首頁與 Nginx proxy health 通過；透過 8080 實際驗證商品 POST/PATCH、購物車建立/加購/讀取時重算現價/checkout 清空與 DELETE 清理。
-- 超大 ID 的商品 GET、cart body/path 與 orders request 均回傳 422；OpenAPI 含 9 個 paths 以及 `ProductResponse`、`CartResponse`、`OrderResponse` schemas。
+- 超大 ID 的商品 GET、cart body/path 與 orders request 均回傳 422；OpenAPI 含 10 個 paths 以及 `ProductResponse`、`CartResponse`、`OrderResponse` schemas。
 - `uv lock --check` 通過，fresh `uv export --frozen --no-dev --no-hashes` 與 `requirements.txt` 依賴內容一致；UID 10001 runtime 與 `/data`、`/logs` 寫入權限通過檢查。
-- `app.log` 的 UTC ISO/INFO startup、migration、HTTP 200/201/204/404/422、無 query path、INFO/ERROR traceback、每日 rollover 與 restart 後 log volume 保留通過檢查。
+- `app.log` 的 UTC ISO/INFO startup、migration、HTTP 200/201/204/404/422、無 query path、INFO/ERROR traceback、每日 rollover 與 restart 後 log volume 保留通過檢查；isolated backend image 另實測 demo fault controls、兩種 rollback、delay 喚醒與 SQLite lock 500。
 
-尚未執行 browser 自動化與 HTTP 500 error path；破壞性 `make clean CONFIRM=yes` 尚未執行。`make help` 與未帶 `CONFIRM=yes` 的 clean guard 已驗證。
+Chrome CDP 已以真實 DOM 驗證事件頁啟用/解除並取得 desktop/mobile 截圖；最終截圖 hash/visual review 尚待核對。`checkout_delay` 的 TTL 自動喚醒已驗證，`database_write_lock` 的 60 秒自動到期尚未單獨驗證。破壞性 `make clean CONFIRM=yes` 尚未執行。`make help` 與未帶 `CONFIRM=yes` 的 clean guard 已驗證。

@@ -11,6 +11,11 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Path as ApiPath, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .demo_faults import (
+    DemoFaultConflictError,
+    DemoFaultUnavailableError,
+    demo_fault_manager,
+)
 from .logging_config import configure_logging, logger, shutdown_logging
 
 MAX_PRICE = 1_000_000_000
@@ -124,6 +129,44 @@ def init_db() -> None:
             db.execute("INSERT INTO schema_migrations (version) VALUES (1)")
 
 
+class DemoFaultActivation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fault_id: str = Field(min_length=1, max_length=64)
+
+    @field_validator("fault_id", mode="before")
+    @classmethod
+    def strip_fault_id(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class DemoFaultCard(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fault_id: str
+    title: str
+    description: str
+
+
+class DemoFaultActive(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fault_id: str
+    started_at: str
+    expires_at: str | None = None
+    remaining_seconds: float
+    status: str
+
+
+class DemoFaultsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cards: list[DemoFaultCard]
+    active: DemoFaultActive | None = None
+    lease_seconds: int
+    delay_seconds: int
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     configure_logging()
@@ -131,14 +174,25 @@ async def lifespan(_app: FastAPI):
         logger.info("application startup")
         logger.info("database migration started")
         init_db()
+        await demo_fault_manager.start()
         logger.info("database migration completed")
         yield
     finally:
         logger.info("application shutdown")
-        shutdown_logging()
+        try:
+            await demo_fault_manager.shutdown()
+        finally:
+            shutdown_logging()
 
 
 app = FastAPI(title="日日選物 API", lifespan=lifespan)
+
+
+def _is_checkout_request(method: str, path: str) -> bool:
+    return method == "POST" and (
+        path == "/api/orders"
+        or (path.startswith("/api/carts/") and path.endswith("/checkout"))
+    )
 
 
 @app.middleware("http")
@@ -146,19 +200,34 @@ async def request_logging_middleware(request: Request, call_next):
     started_at = perf_counter()
     path = request.url.path.replace("\r", r"\r").replace("\n", r"\n")
     status_code = 500
+    affected_fault_id = None
     try:
+        if _is_checkout_request(request.method, path):
+            affected_fault_id = demo_fault_manager.checkout_fault_id()
+            if affected_fault_id == "checkout_delay":
+                await demo_fault_manager.wait_for_checkout_delay()
         response = await call_next(request)
         status_code = response.status_code
         return response
     except Exception:
         logger.exception(
-            "unexpected request error method=%s path=%s",
+            "unexpected request error method=%s path=%s fault_id=%s",
             request.method,
             path,
+            affected_fault_id,
         )
         raise
     finally:
         duration_ms = (perf_counter() - started_at) * 1000
+        if affected_fault_id is not None:
+            logger.info(
+                "demo fault affected request fault_id=%s method=%s path=%s status=%s duration_ms=%.2f",
+                affected_fault_id,
+                request.method,
+                path,
+                status_code,
+                duration_ms,
+            )
         logger.info(
             "request method=%s path=%s status=%s duration_ms=%.2f",
             request.method,
@@ -166,6 +235,28 @@ async def request_logging_middleware(request: Request, call_next):
             status_code,
             duration_ms,
         )
+
+
+@app.get("/api/demo-faults", response_model=DemoFaultsResponse)
+async def get_demo_faults():
+    return await demo_fault_manager.get_state()
+
+
+@app.post("/api/demo-faults", response_model=DemoFaultsResponse)
+async def activate_demo_fault(fault: DemoFaultActivation):
+    try:
+        return await demo_fault_manager.activate(fault.fault_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DemoFaultConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except DemoFaultUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.delete("/api/demo-faults", response_model=DemoFaultsResponse)
+async def deactivate_demo_fault():
+    return await demo_fault_manager.deactivate()
 
 
 StrictProductId = Annotated[int, Field(strict=True, gt=0, le=MAX_PRODUCT_ID)]
@@ -665,6 +756,10 @@ def checkout_cart(
         order = _new_order(lines)
         _insert_order(db, order, shipping.name, shipping.address)
         db.execute("DELETE FROM cart_items WHERE cart_id = ?", (cart_id,))
+        if demo_fault_manager.checkout_fault_id() == "checkout_exception":
+            # Keep this failure after both writes so the transaction rolls
+            # back the order insert and cart clear together.
+            raise RuntimeError("demo fault checkout_exception")
         return order
 
 
@@ -675,4 +770,8 @@ def create_order(checkout: Checkout):
         lines = _order_lines_from_items(db, checkout.items)
         order = _new_order(lines)
         _insert_order(db, order, checkout.name, checkout.address)
+        if demo_fault_manager.checkout_fault_id() == "checkout_exception":
+            # The exception is intentionally raised before the context
+            # manager commits the order transaction.
+            raise RuntimeError("demo fault checkout_exception")
         return order
