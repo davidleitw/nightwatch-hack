@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'">
+  <title>NightWatch · 服務拓樸與事故</title>
+  <link rel="stylesheet" href="app.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+<header><a class="brand" href="#topology"><span class="brand-mark" aria-hidden="true">◉</span>NightWatch</a><nav aria-label="主要導覽"><a href="#topology" id="nav-topology">服務拓樸</a><a href="#incidents" id="nav-incidents">事故列表 <span id="nav-count">—</span></a></nav><div class="header-end"><span id="connection" role="status">載入中</span><label class="source-select">資料來源<select id="source"><option value="live">即時 API</option><option value="recording">專案事故錄影</option></select></label></div></header>
+<main>
+  <div id="errors" role="alert"></div>
+  <div id="recording" hidden><div><strong>事故錄影</strong><span>catalog_pool_leak · 2026-09-10 · 非目前系統狀態</span></div><label>事故時間 <input id="replay-time" type="range" min="0" max="180" value="60" step="5"><output id="replay-label">+60 秒</output></label></div>
+  <div class="page-heading"><div><div class="eyebrow">NIGHTWATCH / 觀測工作台</div><h1 id="page-title">服務拓樸</h1><p id="page-description">從服務關聯、量測與判定，掌握系統狀態。</p></div><button id="refresh" class="button">↻ 更新資料</button></div>
+  <section id="topology-view">
+    <div class="overview"><div><span class="metric-label">服務與資源</span><strong id="total-nodes">—</strong></div><div><span class="metric-label"><i class="dot failing"></i>異常</span><strong id="failing-count">—</strong></div><div><span class="metric-label"><i class="dot warning"></i>警告</span><strong id="warning-count">—</strong></div><div><span class="metric-label">目前事故</span><strong class="phase-count" id="active-phase">—</strong></div><div class="snapshot-time"><span class="metric-label">快照時間 · UTC</span><strong id="snapshot-at">—</strong></div></div>
+    <section class="panel topology-panel"><div class="panel-header"><div><h2>服務關聯圖</h2><span id="graph-count">等待資料</span></div><div class="graph-controls"><label class="sr-only" for="node-search">搜尋服務</label><input id="node-search" type="search" placeholder="搜尋服務名稱…"><label class="sr-only" for="health-filter">節點健康篩選</label><select id="health-filter"><option value="all">全部健康狀態</option><option value="failing">異常</option><option value="warning">警告</option><option value="ok">正常</option><option value="unknown">無資料</option></select><button id="zoom-out" aria-label="縮小拓樸">−</button><span id="zoom-value">100%</span><button id="zoom-in" aria-label="放大拓樸">＋</button><button id="fit">符合視窗</button></div></div>
+    <div class="legend"><span><i class="dot ok"></i>正常</span><span><i class="dot warning"></i>警告</span><span><i class="dot failing"></i>異常</span><span><i class="dot unknown"></i>無資料</span><span class="assessment-legend">藍框：懷疑　 紅框＋標籤：根因　 斜線：已排除</span></div>
+    <div id="graph-viewport" tabindex="0" aria-label="服務拓樸，內容較寬時可水平捲動"><div id="graph-canvas"><svg id="edges" aria-label="服務連線"></svg><div id="nodes"></div></div><div id="graph-empty" class="empty">正在讀取服務拓樸…</div></div><div class="graph-caption"><span id="match-count"></span><span>箭頭依契約方向；虛線表示近期未觀測到流量，並不代表斷線。</span></div>
+    <div id="node-detail" aria-live="polite"><div class="empty">點選節點查看量測與相鄰連線。</div></div><div id="sources" class="sources"></div></section>
+    <section class="current-incident" id="current-incident"></section>
+  </section>
+  <section id="incidents-view" hidden>
+    <div class="list-toolbar"><div class="tabs" role="group" aria-label="事故狀態篩選"><button data-status="all" aria-pressed="true">全部</button><button data-status="active" aria-pressed="false">處理中</button><button data-status="closed" aria-pressed="false">已結束</button></div><label class="sr-only" for="incident-search">搜尋事故</label><input id="incident-search" type="search" placeholder="搜尋事故 ID、故障卡或狀態…"></div>
+    <div id="list-note" role="status"></div><div class="panel table-scroll"><table><thead><tr><th>事故</th><th>處理階段</th><th>故障卡</th><th>偵測時間 · UTC</th><th>結局</th><th><span class="sr-only">操作</span></th></tr></thead><tbody id="incident-rows"></tbody></table><div id="list-empty" class="empty" hidden></div></div><p class="list-footer" id="list-count"></p>
+    <section class="panel incident-detail" id="incident-detail" hidden aria-live="polite"></section>
+  </section>
+  <footer><span id="footer-status">等待資料來源</span><span>NightWatch · 只讀觀測</span></footer>
+</main>
+</body>
+</html>
