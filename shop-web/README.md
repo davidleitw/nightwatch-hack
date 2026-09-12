@@ -108,9 +108,9 @@ Compose 只啟動兩個 containers：`frontend` 與 `backend`。Nginx 是 `front
 
 ## 文件與交付紀錄
 
-需求指定的變更紀錄與討論紀錄保留在名稱中的 `eample` 拼字：
+變更紀錄與討論紀錄現放在 `docs/`。歷史版本曾依需求使用 `shop-web-eample/docs/`，該舊路徑只保留在紀錄脈絡中：
 
-- [CHANGELOG.md](../shop-web-eample/docs/CHANGELOG.md)
-- [DISCUSSION.md](../shop-web-eample/docs/DISCUSSION.md)
+- [CHANGELOG.md](docs/CHANGELOG.md)
+- [DISCUSSION.md](docs/DISCUSSION.md)
 
-驗證結果請見 [CHANGELOG](../shop-web-eample/docs/CHANGELOG.md)。
+驗證結果請見 [CHANGELOG](docs/CHANGELOG.md)。
