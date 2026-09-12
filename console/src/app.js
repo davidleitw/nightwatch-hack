@@ -87,7 +87,14 @@ async function selectIncident(id){
  }catch(e){if(request!==detailRequest)return;error('detail',e.message);renderIncidentDetail();}
 }
 function route(){const hash=location.hash.slice(1), parts=hash.split('/');const list=parts[0]==='incidents';$('topology-view').hidden=list;$('incidents-view').hidden=!list;$('nav-topology').setAttribute('aria-current',list?'false':'page');$('nav-incidents').setAttribute('aria-current',list?'page':'false');$('page-title').textContent=list?'事故列表':'服務拓樸';$('page-description').textContent=list?'查看事故進度、偵測來源與已記錄的證據。':'從服務關聯、量測與判定，掌握系統狀態。';let id=null;try{id=list&&parts[1]?decodeURIComponent(parts[1]):null;}catch{error('route','事故網址編碼不合法。');}if(id!==selectedIncident)selectIncident(id);if(!list){renderGraph();renderNode();}renderList();}
-function adopt(next){validateState(next);if(state?.run.id===next.run.id && (state.incident?.revision||0)>(next.incident?.revision||0))return;
+function adopt(next){validateState(next);
+ if(state?.run.id===next.run.id){
+  // A cleared incident has no revision; order full states by their server time.
+  if(Date.parse(next.server_now)<Date.parse(state.server_now))return;
+  if(state.incident && next.incident && state.incident.id===next.incident.id && state.incident.revision>next.incident.revision)return;
+  // Graph SSE can advance independently while GET /api/state is in flight.
+  if(state.graph_now.seq>next.graph_now.seq)next={...next,graph_now:state.graph_now};
+ }
  const oldRun=state?.run.id;if(oldRun && oldRun!==next.run.id){cursor=0;selectedNode=null;shapeKey='';}
  state=next;cursor=Math.max(cursor,next.incident?.revision||0);if(!state.graph_now.nodes.some(n=>n.id===selectedNode))selectedNode=state.graph_now.nodes.find(n=>n.assessment==='origin')?.id||state.graph_now.nodes.find(n=>n.status==='failing')?.id||state.graph_now.nodes[0]?.id||null;
  renderGraph();renderNode();renderCurrent();renderList();if(selectedIncident===next.incident?.id){incidentDetail=next.incident;renderIncidentDetail();}
