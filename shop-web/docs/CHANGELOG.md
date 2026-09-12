@@ -33,3 +33,9 @@
 - 在 `chore/shop-web-docs` 分支將 `CHANGELOG.md` 與 `DISCUSSION.md` 從歷史路徑 `shop-web-eample/docs/` 搬至現行路徑 `shop-web/docs/`，並移除空的舊目錄。
 - README 與文件內的現行連結已改指向 `shop-web/docs/`；舊路徑只在歷史紀錄中保留。
 - 後續功能工作從最新 `master` 開功能分支，PR 目標為 `master`，經 reviewer review 後才合併。
+
+## 商品、購物車與 backend 交付 — 2026-09-12
+
+- 新增商品 CRUD、匿名購物車 CRUD 與購物車 checkout，使用 SQLite 保存資料與訂單快照；完整 endpoint、schema 與限制見 [Backend CHANGELOG](../backend/CHANGELOG.md)。
+- 以 `pyproject.toml`、`uv.lock` 與匯出的 `requirements.txt` 固定 backend 依賴與 Python 3.12 執行環境。
+- 新增 `INFO` 等級 application logging，輸出 stdout 與 `/logs/app.log`，使用 UTC 每日輪替並保留 7 份備份。

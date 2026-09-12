@@ -275,4 +275,4 @@ curl -X POST "$BASE_URL/api/carts/$CART_ID/checkout" \
 - `uv lock --check` 通過，fresh `uv export --frozen --no-dev --no-hashes` 與 `requirements.txt` 依賴內容一致；UID 10001 runtime 與 `/data`、`/logs` 寫入權限通過檢查。
 - `app.log` 的 UTC ISO/INFO startup、migration、HTTP 200/201/204/404/422、無 query path、INFO/ERROR traceback、每日 rollover 與 restart 後 log volume 保留通過檢查。
 
-尚未執行 browser 自動化、HTTP 500 error path、`make help` 與 destructive `make clean` 提示驗證。
+尚未執行 browser 自動化與 HTTP 500 error path；破壞性 `make clean CONFIRM=yes` 尚未執行。`make help` 與未帶 `CONFIRM=yes` 的 clean guard 已驗證。

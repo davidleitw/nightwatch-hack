@@ -48,3 +48,8 @@
 - 在 `chore/shop-web-docs` 分支將兩份文件從歷史路徑 `shop-web-eample/docs/` 搬至現行路徑 `shop-web/docs/`，並移除空的舊目錄。
 - README 與文件連結已同步改用 `shop-web/docs/`；舊路徑只作歷史脈絡。
 - 後續功能改動從最新 `master` 開功能分支，PR 目標為 `master`，經 reviewer review 後才合併。
+
+## 2026-09-12｜本次 backend 功能與交付方式
+
+- 本次 demo 維持兩個 containers 與唯一入口：frontend 對外使用 `8080`，backend 對外使用 `8000`；完整 backend 功能細節見 [Backend CHANGELOG](../backend/CHANGELOG.md)。
+- 使用者要求由 subagents `gpt-5.6-luna max` 執行功能開發與檢查，完成後只建立 PR 交由專責 reviewer 審查，不由執行 agent 自行 merge。

@@ -48,4 +48,4 @@
 - `make smoke`、8080 proxy 的商品/購物車/結帳流程與 OpenAPI 9 paths、三個 response schemas 通過；超大 ID 的 GET、cart body/path 與 orders request 均回傳 422。
 - `uv lock --check` 通過；fresh `uv export --frozen --no-dev --no-hashes` 與 `requirements.txt` 依賴內容一致。runtime 使用 UID 10001 的 `.venv` Uvicorn，`/data`、`/logs` 可由 `app` 寫入。
 - logging 的 UTC ISO/INFO startup、migration、HTTP status/path/duration、INFO/ERROR traceback、每日 rollover 與 restart 後 log volume 保留通過檢查。
-- 尚未執行 browser 自動化、HTTP 500 error path、`make help` 與 destructive `make clean` 提示驗證。
+- 尚未執行 browser 自動化與 HTTP 500 error path；破壞性 `make clean CONFIRM=yes` 尚未執行。`make help` 與未帶 `CONFIRM=yes` 的 clean guard 已驗證。

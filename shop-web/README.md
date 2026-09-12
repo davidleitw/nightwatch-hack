@@ -91,7 +91,7 @@ Backend 的 `shop` logger 預設使用 `LOG_LEVEL=INFO` 與 `LOG_DIR=/logs`。�
 
 uv `lock --check` 通過，fresh export 與 `requirements.txt` 的依賴內容一致；runtime 使用 UID 10001 的 `.venv` Uvicorn，`/data` 與 `/logs` 可由 `app` 寫入。`app.log` 的 UTC ISO/INFO startup、migration、HTTP 200/201/204/404/422、無 query path，以及 INFO/ERROR traceback、每日輪替與 restart 後 `/logs` 保留均通過檢查。
 
-尚未執行 browser 自動化與 HTTP 500 error path；`make help` 與 destructive `make clean` 的提示驗證未執行。前端購物袋仍使用 `localStorage`，未串接 cart API。
+尚未執行 browser 自動化與 HTTP 500 error path；破壞性 `make clean CONFIRM=yes` 尚未執行。`make help` 與未帶 `CONFIRM=yes` 的 clean guard 已驗證。前端購物袋仍使用 `localStorage`，未串接 cart API。
 
 ## 文件與交付紀錄
 
