@@ -1,17 +1,16 @@
-# NightWatch hackathon
+# NightWatch
 
-購物網站、Guard Room 與監控工作台可從 repo root 一鍵啟動；各部分說明見下表。
+目前程式由購物網站、Monitor／Guard Room、調查 Agent 與觀測介面組成。實作與 mock 的盤點見 [INTEGRATION.md](INTEGRATION.md)。
 
-| 路徑 | 用途 |
+| 目錄 | 現行用途 |
 | --- | --- |
-| [shop-web/](shop-web/README.md) | React + FastAPI 購物網站，使用 Docker Compose 啟動 |
-| [guardroom/](guardroom/README.md) | Docker 部署、monitor graph、歷史 snapshot 與調查 API；實作在 `control/server/` |
-| [console/](console/README.md) | 即時拓樸、monitor log 與 AI 調查工作台 |
-| [control/](control/README.md) | Monitor 套件與 Python 調查引擎；可讀 graph API 或使用事故錄影 |
-| [BACKEND.md](BACKEND.md) | Monitor、Guard Room、Watcher 的專案方向；根目錄保留新加入的 Python 專案骨架 |
-| [contracts/](contracts/README.md) | 共用契約、schema 與事故錄影，維持原路徑 |
-| [gate/](gate/SKILL.md) | PR 檢查與合併工具；有寫入操作，使用前依該目錄說明確認授權 |
-| [archive/](archive/README.md) | 舊 shop、console 任務、control 的 Go 任務及模擬服務，保留原文供查閱與還原 |
+| [shop-web/](shop-web/README.md) | React 網站、FastAPI gateway、catalog、cart、order；SQLite 保存資料 |
+| [control/](control/README.md) | Monitor 函式監測、讀取真實 graph／log 的調查 Agent |
+| [control/server/](control/server/README.md) | Guard Room HTTP API、歷史快照、SQLite 調查、SSE |
+| [guardroom/](guardroom/README.md) | Docker Compose 部署、Monitor 對應設定與啟動腳本 |
+| [console/](console/README.md) | 真實調查工作區，以及明確選取的 mock／錄影介面 |
+| `contracts/schemas/`、`contracts/fixtures/` | 程式與測試仍載入的 JSON schema、離線錄影；舊架構說明已移除 |
+| `gate/` | PR／harness 工具，與網站執行流程分開 |
 
 ## 一鍵重啟全部服務
 
@@ -60,33 +59,8 @@ Console 的 upstream 自動指向本次啟動的 Guard Room，不使用 mock。
 需在啟用故障後實際送出結帳請求才會產生觀測；窗口內混有成功資料時，失敗節點顯示 warning。
 判定與門檻見 [Guard Room 說明](guardroom/README.md#結帳故障觀測)。
 
-## 單獨執行現有程式
+個別元件的啟動方式見上表。HTTP server 本身不載入 dotenv；Docker Compose 從 `guardroom/.env` 取得並注入設定，CLI 則讀 `control/.env` 或根目錄 `.env`。自動偵測可能觸發模型呼叫。
 
-購物網站：
+目前可觀察、調查並保存報告；本機 CLI／host server 可明確啟用解除演練故障的工具，解除故障不等於業務恢復。Docker 部署預設未啟用修復工具。店面的示範結帳沒有金流或物流。
 
-```sh
-cd shop-web
-make up
-```
-
-前端預設位於 `http://localhost:8080/`。建置需求、資料保存與停止方式見 [shop-web README](shop-web/README.md)。
-
-Python 調查 loop：
-
-```sh
-cd control
-uv sync --locked
-bash run-agent.sh --replay-model
-```
-
-安裝好依賴後，`--replay-model` 不需要模型金鑰或對外連線。既有錄影證據不足時會明確回報
-`unresolved` 並以 exit code 1 結束；這不是 live 調查成功，詳見 [control README](control/README.md)。
-
-## 舊任務流程
-
-原本 `shop/`、`control/`、`console/` 三部份的編號任務已移至 `archive/legacy-hackathon/`。
-舊版開工說明完整保留於 [歷史 README](archive/legacy-hackathon/README.md)。
-
-根目錄的 `setup.sh`、`task.sh`、`run-task.sh`、`TASK-TEMPLATE.md` 與 `hackathon.conf` 仍保留；
-其中依賴 `BRIEF.md`、`tasks/`、`stubs/` 的舊編號任務流程，必須先依
-[封存說明](archive/README.md) 還原目錄才能使用。請以現有程式各自的 README 作為啟動入口。
+根目錄的 `task.sh`、`run-task.sh`、`setup.sh`、`hackathon.conf` 仍被既有 gate 工具引用，因此保留；其舊編號任務資料已移除，不是現行服務的啟動入口。

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -60,6 +61,11 @@ class GraphAPI:
         parsed = urlsplit(url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
             raise ValueError("Graph URL must be an HTTP(S) endpoint without credentials or a fragment")
+        self.repair = None
+        shop_url = os.getenv("NIGHTWATCH_SHOP_URL")
+        if shop_url and not parsed.query:
+            from .repair import DemoRepair
+            self.repair = DemoRepair(shop_url)
         self.url = url
         self.live = not parsed.query
         self.started = time.monotonic()
@@ -205,6 +211,9 @@ class GraphAPI:
                     "fetch_limit": {"type": "integer", "minimum": 1, "maximum": 2000},
                 }, "additionalProperties": False},
             }])
+        if self.repair:
+            from .repair import REPAIR_TOOLS
+            definitions.extend(copy.deepcopy(REPAIR_TOOLS))
         self.capabilities = {
             "nodes": [{"id": node["id"], "kind": node["kind"]} for node in graph["nodes"]],
             "tools": definitions,
@@ -225,12 +234,20 @@ class GraphAPI:
             ),
         }
 
+        if self.repair:
+            self.opening["task"] += " Inspect demo fault state early; if an active demo fault is observed, deactivate it promptly, then read health and fresh graph evidence before submitting the report."
+            self.opening["data_scope"] = self.opening["data_scope"].replace(
+                "health probes and runtime operations are not connected", "general runtime operations are not connected")
+            self.opening["repair_scope"] = "Operator enabled local demo-fault deactivation. No fault injection tool. Fault-control clearance is distinct from business recovery."
+
     async def query(self, name: str, args: Json) -> Observation:
         definition = next((tool for tool in self.capabilities["tools"] if tool["name"] == name), None)
         if definition is None:
             raise ValueError("Tool is not available for this graph source")
         if next(Draft202012Validator(definition["parameters"]).iter_errors(args), None) is not None:
             raise ValueError("Invalid arguments for graph tool")
+        if self.repair and name in {"get_demo_faults", "deactivate_demo_fault", "check_shop_health"}:
+            return await self.repair.query(name, args)
         if name == "list_graph_snapshots":
             result = await asyncio.to_thread(self._snapshots, args)
             return Observation(result=result, source="guardroom_snapshot_index", t=int(time.monotonic() - self.started),

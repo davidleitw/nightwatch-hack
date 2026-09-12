@@ -21,7 +21,7 @@ class Hypothesis(BaseModel):
 
 
 class InvestigationReportBody(BaseModel):
-    """Submit observed facts, hypotheses and limitations; never claim a repair."""
+    """Submit observed facts, hypotheses, bounded actions and their limitations."""
     model_config = ConfigDict(extra="forbid")
     summary_zh: str = Field(min_length=1)
     conclusion: Literal["supported", "inconclusive"]
