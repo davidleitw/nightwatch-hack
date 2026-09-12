@@ -1,5 +1,42 @@
 # 前端 API：整合 Guard Room
 
+## 2026-09-12：真實唯讀接線
+
+目前 main.py 預設關閉 mock 時，`/api/state`、`/api/capabilities`、
+`/api/incidents`、事故 detail/events/snapshots 與 `/api/debug/logs` 已可讀取
+monitor checkpoint 與 SQLite investigation；`/events` 同時送 state、graph、
+incident、log、ping。`/api/readiness` 只對已接入且新鮮的 logstore 回 ok，
+完整故障實驗仍 ready=false。缺少的量測保留 null。
+
+console 原有讀取方式可用。舊事故投影的 detected_at 是調查開始時間，
+summary 明寫非自動偵測；終態投影為 unresolved（預算耗盡則保留 budget_exhausted），
+不代表修復成功。state.incident 只放進行中調查，已完成的仍可從列表和 detail 讀取。
+原始 outcome/status 請使用 `/api/investigations`。
+
+新增 `GET /api/investigations/{id}/report` 回已保存的調查報告；執行中 409，
+未知 ID 404。`GET /api/investigations/{id}/snapshots` 回
+`{investigation_id, snapshots:[{evidence_id,snapshot}]}`；每張都是 get_graph
+工具實際保存的原始觀測，不是完整連續錄影，也不會重讀目前 graph 取代歷史。
+
+舊 `/api/incidents/{id}/report`、timeline 沒有足夠資料滿足完整實驗契約，回 503，
+error.details.report_url 指向調查報告。故障注入、還原、批准、換輪與操作進度仍 503。
+master #19 已加入原生 investigation 工作台、開始調查按鈕與 POST proxy；
+即時工作台使用 investigations API，舊 state／incident 接線保留供相容使用。
+
+日誌按發生時間新到舊回傳，service 使用 config 的 node ID，limit 預設 20、範圍 1–20000。
+資料来自 checkpoint 保留的最多 10000 筆 monitor 記錄，不是完整歷史查詢；
+未對應到 config 節點的 log 不放進 service 列表。沒有 trace_id 時回空字串。
+
+live SSE 的 incident revision 使用持久化 cursor；相同 run 可重播，換程序後
+使用新 run 並送完整 state。原生 investigation stream 的 cursor 不受程序重啟影響。
+工具失敗在相容 journal 表為 observation.recorded，payload 保留 error；
+原始 tool.failed 仍可從 investigation events 讀取。完整差異、假設與缺口見
+[API-READINESS-SPEC.md](API-READINESS-SPEC.md)。
+
+以下保留最初 mock 實作紀錄；其中「關閉時 503」、「沒有 graph SSE」的描述已由上述接線更新。
+
+## 最初 mock 實作紀錄
+
 以已合併的 PR #6（`267e19d`）為基礎，其他前端介面現在與 graph 共用
 `control/server/main.py` 的 FastAPI app、port 與 OpenAPI。沒有另一個 HTTP server。
 

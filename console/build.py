@@ -5,7 +5,7 @@ from pathlib import Path
 
 def main():
     console = Path(__file__).resolve().parent
-    sources = {name: console / 'src' / name for name in ('index.html', 'app.css', 'app.js', 'data.js', 'connect.js', 'incident-template.html')}
+    sources = {name: console / 'src' / name for name in ('index.html', 'app.css', 'app.js', 'data.js', 'connect.js', 'workspace.js', 'investigations.js', 'investigation-data.js', 'incident-template.html')}
     recording = console.parent / 'contracts' / 'fixtures' / 'catalog_pool_leak'
     sources.update({f'recordings/{name}': recording / name for name in ('state.initial.json', 'state.json', 'snapshots.jsonl', 'events.jsonl')})
     missing = [str(path) for path in sources.values() if not path.is_file()]

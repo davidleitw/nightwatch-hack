@@ -1,33 +1,12 @@
-# NightWatch control server
+# Guard Room server 開發入口
 
-Run the existing FastAPI app with `uv run --locked uvicorn main:app --host
-127.0.0.1 --port 8001` from this directory. The investigation manager stores
-sessions in `../.data/investigations.sqlite3` by default; set
-`NIGHTWATCH_INVESTIGATION_DB` to use another file and
-`NIGHTWATCH_GRAPH_URL` to select the operator configured graph source.
+這裡是 Guard Room 的 FastAPI 實作，使用獨立 uv 專案，需 Python 3.11+。
+`guardroom/` 放操作 config 與啟動腳本，`control/server/` 放 server 程式。
+Graph 功能行為、設定預設值與操作限制統一以 [Guard Room README](../../guardroom/README.md) 為準。
 
-Production investigations use `NIGHTWATCH_LLM_API_KEY` (or
-`OPENAI_API_KEY`) and `NIGHTWATCH_LLM_MODEL` (default `gpt-6-astra`). The live graph
-adapter exposes `get_graph` (including historical timestamps),
-`list_graph_snapshots`, and `get_node_detail`; see [agent tools](../README.md).
-Restart the backend after updating the agent package so new investigations load
-the new tools and prompt. Offline tests may inject a Python
-model factory through `install_investigations(..., model_factory=...)` or by
-replacing `app.state.investigation_manager.model_factory` before application
-startup. HTTP clients cannot select either the model or graph URL.
+## 本機開發
 
-## Existing graph and legacy frontend endpoints
-
-獨立 uv 專案，Python 3.11+。啟動時讀 `GUARDROOM_CONFIG`，預設
-`guardroom/shop-web.config.json`。config 提供拓撲，monitor log 提供節點量測，
-graph state 儲存於本機 JSON checkpoint，重啟後接續讀取。
-
-```sh
-./guardroom/restart.sh
-curl http://127.0.0.1:8001/api/graph
-```
-
-手動開發：
+從 repo 根目錄執行：
 
 ```sh
 cd control/server
@@ -35,29 +14,53 @@ uv sync --locked
 uv run uvicorn main:app --reload --host 127.0.0.1 --port 8001
 ```
 
-完整流程、config、snapshot、shop-web 操作範例與限制見
-[Guard Room README](../../guardroom/README.md)。僅支援單一 worker。
+啟動後可開啟 `http://127.0.0.1:8001/docs`，或讀取 `/openapi.json` 查看實際 API 定義。
+背景啟動／重啟方式、config 路徑與多 instance 限制見 Guard Room README。
 
-- GET /api/graph：最新 monitor graph。
-- GET /api/graph/snapshots?limit=100&before_seq=120：歷史快照索引與分頁。
-- GET /api/graph?timestamp=...：不晚於指定時間的最後一份歷史 graph；timestamp 需帶時區。
-- GET /api/graph?state=normal|problem：dummy 預覽。
-- POST /api/logs：接收並持久化 log、更新 graph。
-- GET /events：即時 SSE log。
-- /docs、/openapi.json：API 文件。
+## 程式模組
 
-Graph 時間以台灣時間 `+08:00` 輸出；歷史預設每 5 秒保存、保留 15 分鐘，
-可在 config 的 history 設定。原始 monitor log 繼續使用 UTC。
+| 檔案 | 責任 |
+| --- | --- |
+| [main.py](main.py) | App 組裝、生命週期與背景排程、graph／歷史查詢路由 |
+| [graph_state.py](graph_state.py) | Config 驗證、JSONL 讀取、事件去重、指標與健康判定、live checkpoint |
+| [graph_history.py](graph_history.py) | 原子 JSON 寫入、歷史保存與清理、索引、分頁及時間選取 |
+| [logs.py](logs.py) | Console log 驗證、HTTP 接收、SSE log 廣播 |
+| [frontend_api.py](frontend_api.py) | 其他前端路由與 mock 模式接線 |
+| [frontend_live.py](frontend_live.py) | Monitor 與 SQLite 調查的唯讀前端投影 |
+| [frontend_mock.py](frontend_mock.py) | 前端 mock 資料與記憶體狀態 |
+| [investigation_api.py](investigation_api.py) | 調查 API、模型與 graph 來源接線、調查生命週期 |
+| [investigation_store.py](investigation_store.py) | 調查 session 的 SQLite 持久化 |
 
-其他前端 API 見 [前端 API 文件](../FRONTEND-API.md)，其 mock 預設關閉，
-可用 `NIGHTWATCH_MOCK_DATA=1` 啟用；live graph 尚未接入 /api/state 與 SSE graph。
+## 調查開發設定
 
-## SSE integration
+Investigation manager 預設將 session 存在 `../.data/investigations.sqlite3`。
+可用 `NIGHTWATCH_INVESTIGATION_DB` 指定其他檔案，並以 `NIGHTWATCH_GRAPH_URL`
+指定操作端設定的 graph 來源。
 
-`/events` has one handler. With `NIGHTWATCH_MOCK_DATA=1`, it retains the
-legacy state/journal stream and also emits live `log` events. With mock data
-off and no legacy state backend, it streams logs and heartbeats only, with
-an initial comment declaring state unavailable; `/api/state` remains 503.
-Cursor syntax is validated in both modes. Logs are live-only and do not
-participate in incident cursor replay. The graph watcher and investigation
-manager both run under the composed application lifespan.
+實際調查使用 `NIGHTWATCH_LLM_API_KEY`（或 `OPENAI_API_KEY`）與 `NIGHTWATCH_LLM_MODEL`（預設 `gpt-6-astra`）。
+Live graph adapter 提供 `get_graph`（含歷史 timestamp）、`list_graph_snapshots`
+與 `get_node_detail`，詳見 [agent tools](../README.md)。更新 agent package 後需重啟後端，
+讓新調查載入新的 tools 與 prompt。
+離線檢查可透過 `install_investigations(..., model_factory=...)` 注入 Python model factory，
+或在 app 啟動前替換 `app.state.investigation_manager.model_factory`。
+HTTP client 不可選擇模型或 graph URL。完整介面見 [調查前端文件](../INVESTIGATION-FRONTEND.md)。
+
+## SSE 接線
+
+`/events` 只有一個 handler。啟用 `NIGHTWATCH_MOCK_DATA=1` 時，保留既有 state／journal
+串流並送出 live log 事件；mock 關閉時，主程式提供真實 state、graph、調查 journal、
+log 與 heartbeat。只有未安裝 live store 的獨立接線保留 log-only 模式。
+兩種模式都驗證 cursor 語法。Log 僅即時傳遞，不參與 incident cursor replay；
+graph watcher 與 investigation manager 都在組合後的 app lifespan 執行。
+真實唯讀 API 已接入 monitor checkpoint 與 investigation SQLite；故障操作及完整實驗稽核仍未接入。
+獨立調查報告與保存的 graph 證據見 `/api/investigations/{id}/report`、`/api/investigations/{id}/snapshots`。
+其他前端 API 見 [前端 API 文件](../FRONTEND-API.md)。
+
+## 文件分工
+
+- [Guard Room README](../../guardroom/README.md)：資料流、topology config、p95 warning、更新頻率、snapshot／歷史 API 與操作限制。
+- [Monitor README](../monitor/README.md)：Decorator、原始事件、logger 過濾與 JSONL／HTTP sink。
+- [前端 API 文件](../FRONTEND-API.md)：其他前端介面的契約與操作範例。
+- [Graph schema](../../console/schema-draft/graph.schema.json)：Graph 回傳格式及引用的正式 schema。
+
+修改功能規則或設定時同步更新 Guard Room README；本文件維護開發入口與模組分工。

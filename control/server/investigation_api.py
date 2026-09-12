@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from frontend_api import APIError
+from frontend_live import saved_snapshots
 from investigation_store import ActiveInvestigation, InvestigationStore, RequestConflict
 from nightwatch_agent.graph import GraphAPI
 from nightwatch_agent.loop import Limits, investigate, safe_error
@@ -113,6 +114,16 @@ class InvestigationList(BaseModel):
 class InvestigationEventList(BaseModel):
     items: list[InvestigationEvent]
     next_after: int | None
+
+
+class InvestigationSnapshot(BaseModel):
+    evidence_id: str
+    snapshot: dict[str, Any]
+
+
+class InvestigationSnapshots(BaseModel):
+    investigation_id: str
+    snapshots: list[InvestigationSnapshot]
 
 
 class InvestigationContext(BaseModel):
@@ -385,6 +396,18 @@ def install_investigations(app, *, model_factory: Callable[[], Any] | None = Non
             raise InvestigationAPIError(404, "not_found", "找不到這件調查")
         return JSONResponse(value, headers=headers)
 
+    async def report(request: Request):
+        response = await detail(request)
+        value = json.loads(response.body)
+        if value["report"] is None:
+            raise InvestigationAPIError(409, "investigation_active", "調查尚未結束，報告尚未產生")
+        return JSONResponse(value["report"], headers=headers)
+
+    async def snapshots(request: Request):
+        response = await detail(request)
+        value = json.loads(response.body)
+        return JSONResponse({"investigation_id": value["id"], "snapshots": saved_snapshots(value)}, headers=headers)
+
     async def events(request: Request):
         query = _query(request, {"after", "limit"})
         if not request.path_params["id"].strip():
@@ -476,6 +499,12 @@ def install_investigations(app, *, model_factory: Callable[[], Any] | None = Non
                       tags=["Investigations"], summary="List persisted investigation events")
     app.add_api_route("/api/investigations/{id}/context", context, methods=["GET"], response_model=InvestigationContext,
                       tags=["Investigations"], summary="Get the saved model context")
+
+    app.add_api_route("/api/investigations/{id}/report", report, methods=["GET"], response_model=InvestigationReport,
+                      tags=["Investigations"], summary="Read the saved terminal investigation report",
+                      responses={404: {"description": "Unknown investigation"}, 409: {"description": "Investigation still running"}})
+    app.add_api_route("/api/investigations/{id}/snapshots", snapshots, methods=["GET"], response_model=InvestigationSnapshots,
+                      tags=["Investigations"], summary="Read exact graph snapshots retained as investigation evidence")
 
     @app.exception_handler(InvestigationAPIError)
     async def investigation_error(request: Request, error: APIError):

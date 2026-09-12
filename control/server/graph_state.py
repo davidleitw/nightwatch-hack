@@ -17,10 +17,16 @@ LOG = logging.getLogger(__name__)
 CAPACITY = 10000
 
 
+class LatencyConfig(StrictModel):
+    warning_ms: float = Field(gt=0, allow_inf_nan=False)
+    min_samples: int = Field(ge=1)
+
+
 class MonitorDefinition(StrictModel):
     monitor_id: Identifier
     node_id: Identifier
     kind: Literal["service", "datastore", "queue", "volume", "synthetic", "external"] = "service"
+    latency: LatencyConfig | None = None
 
 
 class Connection(StrictModel):
@@ -122,14 +128,19 @@ class GraphStore:
             durations = sorted(value for log in completed
                                if type(value := log["attributes"].get("duration_ms")) in (int, float)
                                and math.isfinite(value) and value >= 0)
+            p95_ms = durations[math.ceil(len(durations) * .95) - 1] if durations else None
             status = "unknown"
             if completed:
                 status = "failing" if failed == len(completed) else "warning" if failed else "ok"
+            if (status == "ok" and monitor.latency is not None and p95_ms is not None
+                    and len(durations) >= monitor.latency.min_samples
+                    and p95_ms >= monitor.latency.warning_ms):
+                status = "warning"
             nodes.append({
                 "id": monitor.node_id, "kind": monitor.kind,
                 "traffic": len(completed) / self.config.window_seconds if active else None,
                 "errors": failed / len(completed) if completed else None,
-                "p95_ms": durations[math.ceil(len(durations) * .95) - 1] if durations else None,
+                "p95_ms": p95_ms,
                 "saturation": None, "alive": bool(active), "sat_label": "utilization",
                 "status": status, "assessment": "unassessed",
                 "trend": {"errors": "na", "latency": "na", "saturation": "na"},

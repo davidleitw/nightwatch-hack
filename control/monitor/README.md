@@ -3,6 +3,20 @@
 收集函式執行生命週期、執行期間的 Python logging output，以及未處理 exception。
 僅使用 Python 3.11+ 標準函式庫。既有 `@monitor(name="...")` 用法相容。
 
+Monitor 提供每次呼叫的原始事件；Guard Room 負責將這些事件彙總成 graph。
+Monitor 不直接送出 p95 或 graph 的 warning／failing，兩者由 Guard Room 的窗口與門檻判定。
+
+```text
+受監控函式／函式內 logger
+  → monitor 事件（monitor_id、執行結果、duration_ms）
+  → JSONL 或 HTTP sink
+  → Guard Room（config 映射、窗口聚合、健康判定）
+  → 最新 graph／歷史 snapshot
+```
+
+Shop-web 目前使用 JSONL 路徑，示範 monitor 為 `shop.health`、`shop.products`、
+`shop.db.query`；啟動與 graph config 見 [Guard Room README](../../guardroom/README.md)。
+
 ```python
 import logging
 from monitor import MonitorConfig, get_detail, monitor
@@ -32,7 +46,34 @@ detail = get_detail("payment")
 | `models.py` | config、state、event 與 EventSink 輸出介面 |
 | `runtime.py` | invocation 關聯、生命週期、狀態及有上限的近期事件 |
 | `adapters.py` | logging handler 輸入、JSONL 檔案輸出 |
+| `console.py` | 將 monitor 事件投影成 console log schema |
+| `guardroom.py` | 背景 HTTP 批次傳輸、重試與送出統計 |
 | `__init__.py` | decorator 與預設依賴組裝、對外 API |
+
+## 事件與 graph 指標的分工
+
+| 事件 kind | 內容 | Guard Room 的用途 |
+| --- | --- | --- |
+| `started` | status=running、invocation ID、時間 | 代表窗口內有活動，不計完成次數 |
+| `finished` | status=ok、duration_ms | 計入完成次數與耗時樣本 |
+| `exception` | status=error、duration_ms、error、traceback | 計入完成／失敗次數與耗時樣本 |
+| `log` | logger level、message，例外時帶 traceback | 調查資訊，不計完成／失敗次數與 p95 樣本 |
+
+`duration_ms` 量測被 decorator 包住的函式執行時間，不是完整 HTTP 往返耗時。
+巢狀函式各自計時，外層包含等待內層的時間；跨節點不可直接加總成請求耗時。
+原始 JSONL 的 status／duration_ms 是頂層欄位，HTTP console log 格式放在 attributes。
+
+Guard Room 依 monitor_id 計算最近 `window_seconds`（預設 60 秒）的 p95、
+完成次數／秒與失敗比例。每個 monitor 的延遲規則設定在
+[`guardroom/shop-web.config.json`](../../guardroom/shop-web.config.json) 的 monitors 項目，
+例如 `"latency": {"warning_ms": 500, "min_samples": 20}`。
+足夠樣本且 p95 達門檻可讓成功呼叫的節點顯示 warning；monitor 自己的執行 status
+仍是 ok。Graph status 與 monitor status 是不同欄位語意。
+
+Monitor 的 UTC 事件時間保持原樣；Guard Room 新產生的 graph `at` 使用台灣時間 `+08:00`。
+完整判定優先序與歷史查詢見 [Guard Room README](../../guardroom/README.md)。
+
+## Logging 收集與 level 過濾
 
 每次呼叫產生 invocation_id，巢狀呼叫使用 parent_invocation_id，log 歸屬最內層
 監測函式。ContextVar 隔離 async task；`asyncio.to_thread` 可傳遞 context，
@@ -49,6 +90,24 @@ Decorator 會將 handler 安裝到 root logger，不調整全域 level，也不�
 logger 本身過濾掉的訊息無法收集；`propagate=False` 的 logger 請顯式呼叫
 `install_logging(logger)`。必須在函式執行的 context 內捕捉；請在 QueueHandler 的
 來源 logger 安裝 handler，不能等 QueueListener 的其他 thread 才關聯。
+
+Shop-web 在 startup 的 `configure_logging()` 之後呼叫 `install_logging(logger)`，
+三個 monitor 都設定 `level="WARNING"`。一般 logger 訊息只收 WARNING／ERROR／CRITICAL，
+但 INFO 等級的 started／finished 仍會產生，確保 graph 有正常呼叫的分母與耗時。
+這是沿用既有 handler 的過濾，無需在 Guard Room 再按 level 丟棄所有 INFO 事件。
+
+| 設定 | 位置 | 控制什麼 |
+| --- | --- | --- |
+| `LOG_LEVEL` | Shop-web 環境變數 | 應用 logger 與 stdout／app.log 的輸出門檻 |
+| `MonitorConfig.level` | Python decorator | monitor 擷取一般 logger 訊息的最低等級 |
+| `latency.warning_ms`／`min_samples` | Guard Room config | graph 的 p95 warning 判定 |
+
+以上門檻各自作用；例如 LOG_LEVEL=ERROR 時，logger 不會產生 WARNING，monitor 無法補回。
+目前 shop-web 啟停與 request middleware 的既有 log 位於 monitor invocation 之外，
+不會被歸屬到這三個 monitor。應在受監控函式內有實際重試、降級或已處理例外時 logging；
+未處理例外已由 monitor 記錄，不需為收集再記錄一次。
+
+## 程序內狀態與 JSONL
 
 `get_states()` 回傳各節點最新一次狀態更新；並行執行時不表示所有呼叫的彙總健康。
 `get_detail(name)` 含 config、state、active_invocations、events、event_capacity、sink_errors；
@@ -104,6 +163,8 @@ ConsoleLogSink 本身只建立 payload；HTTP 傳輸由下方 GuardRoomSink 負�
 ## 傳送到 Guard Room
 
 GuardRoomSink 使用背景 thread 批次 POST；emit 只投影、序列化與非阻塞入列。
+範例的 payment-monitor 若要出現在 graph，需先在 Guard Room config 宣告對應 node；
+接收端依 config 重建 refs.node_ids，未知 monitor 的 log 仍接收，但不新增 graph 節點。
 先啟動 `./guardroom/restart.sh`，應用程式再建立 sink：
 
 ```python
@@ -134,6 +195,10 @@ async shutdown 可用 `await asyncio.to_thread(sink.close, 5)` 避免阻塞 even
 max_retries=3、retry_delay_seconds=0.25。單筆序列化超過 max_event_bytes（預設 256 KiB）
 會丟棄；queue 容量之外最多還有一批正在組裝／傳送的事件。
 
+一批在累積 50 筆或自第一筆起等待 0.5 秒後送出，shutdown 可提早送出未滿批次。
+每一筆是事件，不是一次函式呼叫；一次正常呼叫通常有 started／finished 兩筆。
+Guard Room 每次 HTTP 接收會提交一次 live graph，歷史保存另有獨立排程。
+
 timeout、網路錯誤、429、5xx 會退避重試，其他 HTTP 錯誤不重試。
 重試保留原始 event_id 與 body。stats 提供 queued、in_flight、sent、retried、dropped、
 last_error、closed；sent 是收到 HTTP 2xx 的事件數（包含接收端判定為重複的事件），
@@ -144,6 +209,8 @@ close 回傳 True 代表 worker 已結束，不保證所有事件送達，需搭
 超過 close 期限回傳 False，停止後续重試／傳送；正在進行的 HTTP 呼叫仍可能完成，
 待其返回後清理剩餘 queue，因此統計可能稍後更新。可再次 close 等待 worker 結束。
 
-目前使用記憶體 queue，無磁碟 spool／重啟重播。HTTP 成功只表示 Guard Room 接收，
-不保證 console 已顯示。Docker 裡的 127.0.0.1 是容器自己，endpoint 必須設定為
-該環境可達的 Guard Room 位址。既有 shop-web 尚未自動切換到 HTTP sink。
+目前 sender 使用記憶體 queue，無磁碟 spool／重啟重播。Guard Room HTTP 成功表示
+接收端已將事件與 live graph checkpoint 寫入檔案，不保證 console 已顯示或已產生歷史快照。
+Docker 裡的 127.0.0.1 是容器自己，endpoint 必須設定為該環境可達的 Guard Room 位址。
+Shop-web 預設透過 Compose 共用的 `control/tmp/monitor.jsonl` 讓 Guard Room 讀取，
+沒有自動啟用 HTTP sink；兩條來源共用 `(monitor_id, event_id)` 去重。
