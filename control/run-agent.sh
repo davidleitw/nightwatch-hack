@@ -11,6 +11,5 @@ elif [[ -f "$control_dir/../.env" ]]; then
 fi
 
 exec uv "${uv_args[@]}" nightwatch-agent \
-  --fixture "$control_dir/../contracts/fixtures/catalog_pool_leak" \
   --report-schema "$control_dir/../contracts/schemas/agent-report.schema.json" \
   "$@"

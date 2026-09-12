@@ -5,6 +5,8 @@ from typing import Literal
 from fastapi import FastAPI, Query
 from pydantic import BaseModel, Field
 
+from frontend_api import install_frontend
+
 
 class Trend(BaseModel):
     errors: Literal["rising", "falling", "flat", "na"] = "flat"
@@ -121,3 +123,6 @@ def get_graph(
 ) -> Graph:
     """Return a synthetic snapshot; state applies only to this request."""
     return dummy_graph(state)
+
+
+install_frontend(app, graph_provider=dummy_graph)
