@@ -16,16 +16,19 @@ from jsonschema import Draft202012Validator, ValidationError
 from openai import APIError
 from pydantic_ai import Agent, ModelRetry, RunContext, Tool, ToolOutput
 from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior, UsageLimitExceeded
-from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model
 from pydantic_ai.usage import RunUsage, UsageLimits
 
-from .prompts import GUARDROOM_PROMPT, GRAPH_SYSTEM_PROMPT, SYSTEM_PROMPT, tool_description
+from .prompts import GUARDROOM_PROMPT, GRAPH_SYSTEM_PROMPT, SYSTEM_PROMPT, REPAIR_PROMPT, tool_description
 from .report import InvestigationReportBody, REPORT_VERSION, SUBMIT_DESCRIPTION, submit_definition, validate_submission
 
 Json = dict[str, Any]
 ContextCallback = Callable[[Json], None]
 TOOL_CAPS = {
+    "get_demo_faults": 16384,
+    "deactivate_demo_fault": 16384,
+    "check_shop_health": 4096,
     "get_graph": 16384,
     "list_graph_snapshots": 65536,
     "get_node_history": 3072,
@@ -91,7 +94,7 @@ class Observation:
     summary_zh: str
 
 
-# The data owner injects a read-only implementation. No invented HTTP /tools endpoint.
+# The data owner injects the declared observations and optional bounded demo actuator.
 Backend = Callable[[str, Json], Awaitable[Observation]]
 
 
@@ -205,6 +208,11 @@ def static_instructions(capabilities: Json, report_schema: Json) -> str:
     names = [definition["name"] for definition in capabilities["tools"]]
     graph_mode = "get_graph" in names
     prompt = GRAPH_SYSTEM_PROMPT + GUARDROOM_PROMPT if graph_mode else SYSTEM_PROMPT
+    if "deactivate_demo_fault" in names:
+        prompt = prompt.replace("a read-only investigator", "an investigator with a bounded demo actuator")
+        prompt = prompt.replace("Do not claim repair or verified recovery. No runtime changes are available.", "Only the declared demo actuator can change runtime; never claim business recovery without independent evidence.")
+        prompt = prompt.replace("or request runtime changes", "or request undeclared runtime changes")
+        prompt += REPAIR_PROMPT
     if graph_mode:
         names.append("submit_report")
         report_schema = InvestigationReportBody.model_json_schema()
@@ -239,6 +247,21 @@ def validate_report(report: Json, state: Investigation, node_ids: set[str]) -> N
         raise ValueError("Onset must cite that node's history covering the claimed time")
 
 
+def usage_summary(usage: RunUsage, messages: list[ModelMessage]) -> Json:
+    data = asdict(usage)
+    if data["cost"] is not None:
+        data["cost"] = str(data["cost"])
+    data["cache_hit_rate"] = usage.cache_read_tokens / usage.input_tokens if usage.input_tokens else None
+    data["model_requests"] = [
+        {"input_tokens": message.usage.input_tokens,
+         "cache_read_tokens": message.usage.cache_read_tokens,
+         "output_tokens": message.usage.output_tokens,
+         "cache_hit_rate": message.usage.cache_read_tokens / message.usage.input_tokens if message.usage.input_tokens else None}
+        for message in messages if isinstance(message, ModelResponse)
+    ]
+    return data
+
+
 async def investigate(
     *, model: Model | str, capabilities: Json, opening: Json, report_schema: Json,
     backend: Backend, limits: Limits | None = None,
@@ -253,7 +276,7 @@ async def investigate(
     definitions = capabilities["tools"]
     names = [definition["name"] for definition in definitions]
     if len(names) != len(set(names)) or set(names) - TOOL_CAPS.keys():
-        raise ValueError("工具名稱重複或不是 NightWatch 唯讀工具")
+        raise ValueError("工具名稱重複或不是 NightWatch 已宣告工具")
     model_settings = {
         "timeout": limits.request_timeout_secs, "max_tokens": 4096,
         "openai_store": False, "openai_prompt_cache_key": "nightwatch-python-agent-v1",
@@ -275,9 +298,7 @@ async def investigate(
     def save_context() -> None:
         if on_context:
             from pydantic_ai.messages import ModelMessagesTypeAdapter
-            usage_data = asdict(usage)
-            if usage_data["cost"] is not None:
-                usage_data["cost"] = str(usage_data["cost"])
+            usage_data = usage_summary(usage, messages)
             on_context({
                 "instructions": instructions, "tools": tools_context, "opening": opening_context,
                 "model": {"name": str(model_name), "settings": copy.deepcopy(model_settings)},
@@ -348,7 +369,5 @@ async def investigate(
     except (ProcedureIncomplete, ModelAPIError, APIError, UnexpectedModelBehavior) as error:
         status, reason = "unresolved", safe_error(error)
     state.emit("investigation.finished", status=status, reason=reason)
-    usage_data = asdict(usage)
-    if usage_data["cost"] is not None:
-        usage_data["cost"] = str(usage_data["cost"])
+    usage_data = usage_summary(usage, messages)
     return LoopResult(status, reason, report, state.evidence, state.events, usage_data, messages)

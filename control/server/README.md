@@ -24,6 +24,8 @@ control/server/.venv/bin/python -m uvicorn main:app --app-dir control/server --h
 | `NIGHTWATCH_INVESTIGATION_DB` | 預設 `control/.data/investigations.sqlite3`，另有排他鎖檔 |
 | `NIGHTWATCH_MOCK_DATA` | `0`（預設）或 `1`；只切換舊前端 API，不會將 investigation API 換成假模型 |
 
+可選 `NIGHTWATCH_SHOP_URL=http://127.0.0.1:8005`，授權 agent 解除該本機店面的演練故障；工具與驗證邊界見 [system design](../SYSTEM_DESIGN.md)。既有 `/api/faults*` 路由不因此啟用。
+
 模型設定見 [control README](../README.md)。server 不自行載入 dotenv。`/docs`、`/openapi.json` 列出實際路由。
 
 ## 可用 API

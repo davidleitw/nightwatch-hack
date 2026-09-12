@@ -25,9 +25,11 @@ bash control/run-agent.sh --graph-url http://127.0.0.1:8001/api/graph --model
 
 ## 實際工具與限制
 
+修復與 cache 設計見 [SYSTEM_DESIGN.md](SYSTEM_DESIGN.md)。設定 `NIGHTWATCH_SHOP_URL` 為獨占操作的本機店面 HTTP origin，才提供 `get_demo_faults`、`deactivate_demo_fault`、`check_shop_health`；解除演練故障不等於業務恢復。
+
 真實來源提供 `get_graph`、`list_graph_snapshots`、`get_node_detail`、`search_logs`，以 `submit_report` 交付結構化報告。報告記錄 findings、hypotheses、limitations、next_steps，驗證節點與 evidence ID；有調查報告不代表修復成功。
 
-歷史工具讀原始快照，沒有可信基線。`search_logs` 只在最新一批保留日誌內搜尋，沒有全歷史分頁。Prometheus、trace、health probe 與 runtime 修復都未接入。
+歷史工具讀原始快照，沒有可信基線。`search_logs` 只在最新一批保留日誌內搜尋，沒有全歷史分頁。Prometheus、trace 與通用 runtime 修復未接入；可明確啟用本機店面 demo-fault 解除及 health 查詢。
 
 `alive` 是 monitor 窗口內有無事件；edge 來自設定，尚無邊流量量測；缺失值是 `null`。不要把沒有事件解讀成服務已死，或把 `null` 當零。
 

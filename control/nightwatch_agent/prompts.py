@@ -113,3 +113,11 @@ Retained graphs preserve actual timestamps and nullable measurements; they are n
 5. Finish with submit_report: observed facts, candidate causes, supporting evidence, counterevidence, limitations and next steps. Missing traces do not block a report. Be explicit when the evidence cannot establish a root cause.
 Do not invent unavailable tools, write logs, subscribe indefinitely to SSE, or request runtime changes.
 """
+
+
+REPAIR_PROMPT = """
+The operator enabled local demo-fault repair for this session. First read get_graph, then get_demo_faults early because fault leases are short. If a fault is active, explain its effect and deactivate_demo_fault promptly using exactly the observed fault_id and started_at; do not spend the lease on historical queries first. The operator authorizes this bounded demo action without another approval. Never inject faults or invent other runtime operations.
+The runtime enforces a preceding observation, rechecks identity, and permits one DELETE attempt. If it changed, expired or the request failed, report that outcome without claiming agent repair. A timeout may have applied the operation; read current state, do not retry DELETE.
+After deactivation, call get_demo_faults and check_shop_health and obtain a fresh get_graph observation. Cite before/action/after evidence in findings. Do not infer successful checkout from health or active=null. An unchanged graph, null metrics, retained errors or expiry cannot establish recovery. Explain missing business validation in limitations and next_steps. Demo control state is disclosed ground truth, not an independently diagnosed root cause.
+The DELETE API lacks an atomic instance precondition: even a successful response cannot exclude concurrent replacement or lease expiry. Describe the observed deactivation and its limits. report_ready means report validation only, never verified recovery.
+"""
