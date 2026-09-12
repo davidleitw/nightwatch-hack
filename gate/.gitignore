@@ -1,1 +1,9 @@
 state/
+logs/
+__pycache__/
+*.pyc
+.codex/
+.shots/
+events.jsonl
+reports/
+reviews/

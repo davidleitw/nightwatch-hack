@@ -1,0 +1,458 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NightWatch harness snapshot v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repo",
+    "generated_at",
+    "sync",
+    "gate",
+    "mrs",
+    "automation"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "repo": {
+      "type": "string"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sync": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "interval_secs",
+        "last_attempt_at",
+        "last_success_at",
+        "error",
+        "syncing",
+        "cycles"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "live",
+            "offline"
+          ]
+        },
+        "interval_secs": {
+          "type": "integer",
+          "minimum": 5
+        },
+        "last_attempt_at": {
+          "$ref": "#/$defs/nullableTime"
+        },
+        "last_success_at": {
+          "$ref": "#/$defs/nullableTime"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "syncing": {
+          "type": "boolean"
+        },
+        "cycles": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "heartbeat_at",
+        "events",
+        "errors"
+      ],
+      "properties": {
+        "heartbeat_at": {
+          "$ref": "#/$defs/nullableTime"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/event"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "mrs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/mr"
+      }
+    },
+    "automation": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Background review and merge worker status; last errors and per-PR decisions are preserved."
+    }
+  },
+  "$defs": {
+    "nullableTime": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "event": {
+      "description": "Original gate/EVENTS.md event, preserved without renaming or dropping fields.",
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "kind": {
+          "type": "string"
+        }
+      }
+    },
+    "sections": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "做了什麼": {
+          "type": "string"
+        },
+        "依據什麼驗證的": {
+          "type": "string"
+        },
+        "沒有驗證的": {
+          "type": "string"
+        },
+        "契約疑問": {
+          "type": "string"
+        }
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "previous_path",
+        "status",
+        "additions",
+        "deletions",
+        "patch",
+        "patch_source"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "previous_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "additions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deletions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "patch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "patch_source": {
+          "enum": [
+            "github_excerpt",
+            "unavailable"
+          ]
+        }
+      }
+    },
+    "mr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "number",
+        "url",
+        "title",
+        "author",
+        "state",
+        "draft",
+        "branch",
+        "base_branch",
+        "sha",
+        "base_sha",
+        "part",
+        "nn",
+        "created_at",
+        "updated_at",
+        "merged_at",
+        "closed_at",
+        "additions",
+        "deletions",
+        "changed_files",
+        "files_complete",
+        "files",
+        "summary",
+        "self_reported",
+        "report",
+        "gate",
+        "review"
+      ],
+      "properties": {
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "url": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "author": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "OPEN",
+            "MERGED",
+            "CLOSED"
+          ]
+        },
+        "draft": {
+          "type": "boolean"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "base_branch": {
+          "type": "string"
+        },
+        "sha": {
+          "type": "string"
+        },
+        "base_sha": {
+          "type": "string"
+        },
+        "part": {
+          "enum": [
+            "shop",
+            "control",
+            "console",
+            null
+          ]
+        },
+        "nn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "merged_at": {
+          "$ref": "#/$defs/nullableTime"
+        },
+        "closed_at": {
+          "$ref": "#/$defs/nullableTime"
+        },
+        "additions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deletions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "changed_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "files_complete": {
+          "type": "boolean"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/file"
+          }
+        },
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text",
+            "source",
+            "verified"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "source": {
+              "enum": [
+                "author_report",
+                "pr_title"
+              ]
+            },
+            "verified": {
+              "const": false
+            }
+          }
+        },
+        "self_reported": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "part": {
+              "type": "string"
+            },
+            "nn": {
+              "type": "string"
+            },
+            "check": {
+              "type": "string"
+            },
+            "secs": {
+              "type": "string"
+            },
+            "files": {
+              "type": "string"
+            }
+          }
+        },
+        "report": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "rounds",
+            "latest",
+            "missing_sections",
+            "body"
+          ],
+          "properties": {
+            "rounds": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "round",
+                  "sections"
+                ],
+                "properties": {
+                  "round": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "sections": {
+                    "$ref": "#/$defs/sections"
+                  }
+                }
+              }
+            },
+            "latest": {
+              "$ref": "#/$defs/sections"
+            },
+            "missing_sections": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "做了什麼",
+                  "依據什麼驗證的",
+                  "沒有驗證的",
+                  "契約疑問"
+                ]
+              }
+            },
+            "body": {
+              "type": "string"
+            }
+          }
+        },
+        "gate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "history",
+            "latest",
+            "verdict",
+            "has_previous_head_events"
+          ],
+          "properties": {
+            "history": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/event"
+              }
+            },
+            "latest": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/event"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "verdict": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/event"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "has_previous_head_events": {
+              "type": "boolean"
+            }
+          }
+        },
+        "review": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Codex static review matching this PR head; format is REVIEW.schema.json."
+        }
+      }
+    }
+  }
+}

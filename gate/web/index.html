@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NightWatch · Harness Observatory</title>
+  <style>/* STYLES */</style>
+</head>
+<body>
+  <aside class="rail">
+    <div class="brand"><span class="brand-icon">N<span>↗</span></span><span>NIGHTWATCH<small>HARNESS OBSERVATORY</small></span></div>
+    <div class="rail-label">WORKSPACE / 01</div>
+    <div class="nav-active"><span>◈</span> MR 觀測站 <span class="nav-dot"></span></div>
+    <div class="rail-caption">每一次提交，<br>都有跡可循。</div>
+    <div class="legend"><span class="rail-label">WHO DOES WHAT</span><p><i class="dot purple"></i>Agent 實作與回報</p><p><i class="dot green"></i>Script 檢查與紀錄</p><p><i class="dot amber"></i>Leader 處理判斷</p></div>
+    <div class="rail-bottom">NIGHTWATCH HACKATHON<br><span>Build. Observe. Improve.</span></div>
+  </aside>
+  <main>
+    <header><div class="breadcrumb">NIGHTWATCH <span>/</span> ENGINEERING HARNESS</div><div id="mode" class="mode">載入中</div></header>
+    <section class="heading"><div><div class="eyebrow">THE WORK BEHIND THE WORK</div><h1>讓每一筆改動，說得清楚。</h1><p>從任務、實作到合併，追蹤團隊與 agent 如何一起交付。</p></div><div class="actions"><button id="download" class="button secondary">↓ JSON</button><a id="export" class="button" href="/export.html" download>匯出離線展示 ↗</a></div></section>
+    <div class="source-row"><code id="repo"></code><span id="freshness"></span></div>
+    <div id="automation-status" class="automation-status" hidden></div>
+    <div id="alert" role="status" aria-live="polite" hidden></div>
+    <section class="stats" id="stats" aria-label="MR 統計"></section>
+    <section class="flow"><div class="flow-title"><span class="eyebrow">HOW THE HARNESS WORKS</span><strong>同一套流程，留下可查的證據</strong></div><div class="flow-steps"><div><b>01</b><span>任務與契約<small>確定目標、目錄範圍</small></span></div><em>→</em><div><b>02</b><span>Agent 實作<small>四節回報、自述驗證</small></span></div><em>→</em><div><b>03</b><span>Gate 檢查<small>記錄擱置與實測結果</small></span></div><em>→</em><div><b>04</b><span>合併與跟進<small>保留每一輪判定</small></span></div></div></section>
+    <section class="workbench">
+      <div class="inbox"><div class="section-title"><h2>Merge requests <span id="count">0</span></h2><span class="micro">GITHUB PR</span></div><label class="search"><span>⌕</span><input id="search" type="search" placeholder="搜尋標題、作者、檔案…" aria-label="搜尋 MR"></label><div class="filters"><select id="part" aria-label="依部份篩選"><option value="">所有部份</option><option>shop</option><option>control</option><option>console</option><option value="other">其他</option></select><select id="state" aria-label="依狀態篩選"><option value="">所有狀態</option><option value="OPEN">待合併</option><option value="MERGED">已合併</option><option value="CLOSED">已關閉</option></select></div><div id="list"></div></div>
+      <article id="detail" aria-label="MR 詳細內容"></article>
+    </section>
+    <footer><span>資料來源：GitHub PR + gate/events.jsonl</span><span id="gate-health">Gate 尚無心跳紀錄</span></footer>
+  </main>
+  <script id="snapshot" type="application/json">__SNAPSHOT__</script>
+  <script>const EXPORTED = __EXPORTED__; /* APP */</script>
+</body>
+</html>

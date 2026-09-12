@@ -104,10 +104,18 @@ checkout_merged() {  # pr head
   if git -C "$gate" merge --no-edit "origin/$base" >/dev/null 2>&1; then return 0; fi
   git -C "$gate" merge --abort >/dev/null 2>&1; return 1
 }
-ff_main() {  # 主目錄若乾淨且在主線上,跟上 origin
-  [[ "$(git -C "$main" symbolic-ref --short HEAD 2>/dev/null)" == "$base" ]] || return 0
-  [[ -z "$(git -C "$main" status --porcelain)" ]] || { say "gate: 主目錄有未提交的東西,沒有 ff"; return 0; }
-  git -C "$main" fetch -q --prune && git -C "$main" merge -q --ff-only "origin/$base" || say "gate: 主目錄 ff 失敗,自己看一下"
+ff_main() {  # 只快轉主線；Git 拒絕覆蓋本機修改，不自動 stash/reset。
+  local output
+  if ! output=$(git -C "$main" fetch --prune origin "+refs/heads/$base:refs/remotes/origin/$base" 2>&1); then
+    say "本機同步失敗(fetch): $output"; return 1
+  fi
+  if [[ "$(git -C "$main" symbolic-ref --short HEAD 2>/dev/null)" != "$base" ]]; then
+    say "已更新 origin/${base}；主目錄不在 ${base}，保留目前分支，未快轉"; return 1
+  fi
+  if ! output=$(git -C "$main" -c merge.autostash=false merge --ff-only "origin/$base" 2>&1); then
+    say "本機 $base 未快轉，保留本機修改與提交: $output"; return 1
+  fi
+  say "本機 $base 已同步到 $(git -C "$main" rev-parse HEAD)"
 }
 
 # ---------- 驗一條 PR ----------
@@ -119,9 +127,17 @@ verify() {
   mergeable=$(jq -r .mergeable <<<"$pr"); labels=$(jq -r '[.labels[].name]|join(",")' <<<"$pr")
   author=$(jq -r .author.login <<<"$pr"); opened=$(jq -r .createdAt <<<"$pr"); title=$(jq -r .title <<<"$pr")
   body=$(jq -r '.body // ""' <<<"$pr" | tr -d '\r')
+  [[ "$(jq -r .baseRefName <<<"$pr")" == "$base" ]] || die "#$n 的目標不是 $base,不合併"
+  [[ "$(jq -r .isDraft <<<"$pr")" == false ]] || die "#$n 是 draft,不合併"
+  [[ -z "${GATE_EXPECT_HEAD:-}" || "$head" == "$GATE_EXPECT_HEAD" ]] || die "#$n head 已變,需要重新審查"
   local sha; sha=$(short "$head")
   local marker="$state/$n-$sha.verdict"
-  local waived=""; [[ -f "$state/$n.waive" ]] && waived=$(tr '\n' ',' <"$state/$n.waive" | sed 's/,$//')
+  local waived=""
+  if [[ -n "${GATE_EXPECT_HEAD:-}" ]]; then
+    waived=${GATE_REVIEW_WAIVERS:-}
+  elif [[ -f "$state/$n.waive" ]]; then
+    waived=$(tr '\n' ',' <"$state/$n.waive" | sed 's/,$//')
+  fi
   local reasons="" notes=""
   add_reason() { in_list "$1" $(tr ',' ' ' <<<"$waived") && return; in_list "$1" $(tr ',' ' ' <<<"$reasons") || reasons="${reasons:+$reasons,}$1"; }
   add_note() { notes="${notes:+$notes;}$1"; }
@@ -147,15 +163,24 @@ verify() {
   else add_reason bad_format; add_note "PR 內文第一行沒有 nightwatch 註解"; fi
   # 4. 只碰自己的目錄
   local files outside="" nfiles=0
-  files=$(ghm pr diff "$n" --name-only 2>/dev/null || true)
+  files=$(ghm pr diff "$n" --name-only) || die "#$n 讀取檔案差異失敗,不合併"
   nfiles=$(printf '%s\n' "$files" | sed '/^$/d' | wc -l | tr -d ' ')
   if [[ -n "$part" ]]; then
     outside=$(printf '%s\n' "$files" | sed '/^$/d' | grep -v "^${ppfx}$part/" || true)
     [[ -n "$outside" ]] && { add_reason outside_dir; add_note "碰到:$(paste -sd' ' - <<<"$outside")"; }
+  else
+    outside=$files
+    [[ -n "$outside" ]] && { add_reason outside_dir; add_note "非任務分支,需逐筆審查改動範圍"; }
   fi
   # 5. 契約疑問
   local questions
-  questions=$(printf '%s\n' "$body" | awk -v h="$qhead" 'f && /^(#|\*\*|---)/ {exit} f {print} index($0,h) {f=1; sub(".*" h "[^:：]*[:：]?","",$0); if ($0 !~ /^[[:space:]]*$/) print}' | sed '/^[[:space:]]*$/d' | head -c 500)
+  local report_json
+  report_json=$(printf '%s' "$body" | python3 -B "$here/report.py") || die "#$n 回報解析失敗,不合併"
+  questions=$(jq -r '.latest["契約疑問"] // ""' <<<"$report_json")
+  if [[ "${GATE_CONTENT_REVIEW:-0}" != 1 && "$(jq '.missing_sections|length' <<<"$report_json")" -gt 0 ]]; then
+    # 缺漏四節不能由分支格式例外放行。
+    die "#$n 最新回報缺少四節:$(jq -r '.missing_sections|join("、")' <<<"$report_json")"
+  fi
   if [[ -n "$questions" ]] && ! [[ "$questions" =~ $qnone ]]; then add_reason contract_question; else questions=""; fi
   # 6. 前端要有截圖證據(diff 裡有圖,或內文貼了圖)
   local shots=false
@@ -172,6 +197,7 @@ verify() {
   if [[ $rc -eq 2 ]]; then say "  #$n $branch:抓不到 head $sha(可能剛推了新 commit),下一輪"; return 0; fi
   head_at=$(git -C "$gate" log -1 --format=%cI "$head"); head_epoch=$(git -C "$gate" log -1 --format=%ct "$head")
   base_sha=$(short "$(git -C "$gate" rev-parse "origin/$base")")
+  [[ -z "${GATE_EXPECT_BASE:-}" || "$(git -C "$gate" rev-parse "origin/$base")" == "$GATE_EXPECT_BASE" ]] || die "master 已變,需要重新審查 #$n"
   if [[ $rc -eq 1 ]]; then add_reason conflict; add_note "跟 origin/$base 合不起來"; fi
   if ! in_list conflict $(tr ',' ' ' <<<"$reasons") && [[ -n "$part" ]] && $has_check; then
     log="logs/$n-$sha.log"; check_ran=true
@@ -184,16 +210,29 @@ verify() {
 
   fi
   printf '%s\n' "$body" >"$reports/$n-$sha.md"
+  [[ -n "${GATE_REVIEW_NOTE:-}" ]] && add_note "$GATE_REVIEW_NOTE"
   # 9. 判定
   local kind=held; [[ -z "$reasons" ]] && kind=merged
   local merge_sha=null
   if [[ $kind == merged ]]; then
-    if ghm pr merge "$n" --squash --delete-branch --match-head-commit "$head" >"$state/merge.out" 2>&1; then
-      merge_sha=$(ghm pr view "$n" --json mergeCommit --jq '.mergeCommit.oid' 2>/dev/null | grep -Eo '^[0-9a-f]{12}' || true)
-      [[ -n "$merge_sha" ]] && merge_sha="\"$merge_sha\"" || merge_sha=null
+    if ghm pr merge "$n" --squash --match-head-commit "$head" >"$state/merge.out" 2>&1; then
+      local merged_pr
+      merged_pr=$(ghm pr view "$n" --json state,mergeCommit) || die "#$n 無法確認合併結果,不寫 merged"
+      if [[ "$(jq -r .state <<<"$merged_pr")" == MERGED ]]; then
+        merge_sha=$(jq -r '.mergeCommit.oid // ""' <<<"$merged_pr")
+        [[ -n "$merge_sha" ]] && merge_sha="\"$(short "$merge_sha")\"" || merge_sha=null
+      else
+        kind=held; reasons=merge_failed; add_note "GitHub 尚未合併(可能等待 checks 或 merge queue)"
+      fi
     else
       kind=held; reasons=merge_failed; add_note "gh pr merge 失敗:$(tail -1 "$state/merge.out")"
     fi
+  fi
+  if [[ $kind == merged ]]; then
+    local sync_note
+    sync_note=$(ff_main)
+    add_note "$sync_note"
+    say "$sync_note"
   fi
   local ev; ev=$(jq -nc \
     --arg ts "$(now)" --arg kind "$kind" --arg by "${GATE_BY:-script}" --argjson pr "$n" --arg sha "$sha" \
@@ -213,18 +252,19 @@ verify() {
   emit "$ev"; echo "$kind" >"$marker"
   if [[ $kind == merged ]]; then
     say "  #$n $branch:merged $(jq -r .merge_sha <<<"$ev")(check ${check_secs}s,第 $(jq -r .attempt <<<"$ev") 次)"
-    ff_main
   else
     say "  #$n $branch:held [$reasons] $notes"
     local tailtxt=""; [[ -n "$log" && $check_pass == false && $check_ran == true ]] && tailtxt=$(printf '\n\n<details><summary>驗收輸出尾 40 行</summary>\n\n```\n%s\n```\n</details>' "$(tail -40 "$here/$log")")
-    ghm pr comment "$n" --body "$(printf 'gate 擱置(head %s,第 %s 次):**%s**\n%s%s\n\nleader 會看;推新 commit 會自動重驗。' "$sha" "$(jq -r .attempt <<<"$ev")" "$reasons" "$notes" "$tailtxt")" >/dev/null 2>&1 || say "  (留言失敗)"
+    if [[ "${GATE_NO_COMMENTS:-0}" != 1 ]]; then
+      ghm pr comment "$n" --body "$(printf 'gate 擱置(head %s,第 %s 次):**%s**\n%s%s\n\nleader 會看;推新 commit 會自動重驗。' "$sha" "$(jq -r .attempt <<<"$ev")" "$reasons" "$notes" "$tailtxt")" >/dev/null 2>&1 || say "  (留言失敗)"
+    fi
   fi
 }
 
 scan() {
   ensure_gate
   local me; me=$(leader)
-  local prs; prs=$(ghm pr list --state open --limit 50 --json number,headRefName,headRefOid,isDraft,mergeable,labels,author,createdAt,title,body) || { say "gate: gh pr list 失敗"; return 1; }
+  local prs; prs=$(ghm pr list --state open --base "$base" --limit 50 --json number,headRefName,headRefOid,isDraft,mergeable,labels,author,createdAt,title,body,baseRefName) || { say "gate: gh pr list 失敗"; return 1; }
   printf '%s' "$prs" >"$state/prs.json"; now >"$state/heartbeat"
   say "== scan $(now)  open PR:$(jq length <<<"$prs")"
   local pr
@@ -271,6 +311,8 @@ case "$cmd" in
     if ! $has_check; then say "check 沒設定,PR 只驗格式/目錄/合併/契約疑問"
     else say "check ok ${ppfx}${check_cmd##* }"; fi
     exit $ok ;;
+  sync)
+    lock; ff_main; exit $? ;;
   start)
     ensure_gate
     emit "$(jq -nc --arg ts "$(now)" --arg by "${GATE_BY:-leader}" --arg base "$base" --arg parts "$parts" '{ts:$ts,kind:"day_start",by:$by,base:$base,parts:($parts|split(" "))}')"
@@ -284,10 +326,11 @@ case "$cmd" in
   merge)
     [[ -n "${1:-}" ]] || usage
     n=$1; w=${2:-}
+    lock; trap unlock EXIT
+    ensure_gate
     [[ -n "$w" ]] && { tr ',' '\n' <<<"$w" >>"$state/$n.waive"; sort -u -o "$state/$n.waive" "$state/$n.waive"; }
     rm -f "$state/$n-"*.verdict
-    lock; trap unlock EXIT
-    pr=$(ghm pr view "$n" --json number,headRefName,headRefOid,isDraft,mergeable,labels,author,createdAt,title,body) || die "找不到 PR #$n"
+    pr=$(ghm pr view "$n" --json number,headRefName,headRefOid,isDraft,mergeable,labels,author,createdAt,title,body,baseRefName) || die "找不到 PR #$n"
     export GATE_BY=${GATE_BY:-agent}; verify "$pr" ;;
   return)
     [[ -n "${1:-}" && -n "${2:-}" ]] || usage

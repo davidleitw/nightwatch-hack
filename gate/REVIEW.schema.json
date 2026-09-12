@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["pr", "head_sha", "base_sha", "decision", "summary_zh", "findings", "waivers", "waiver_reason_zh", "verified_by_execution"],
+  "properties": {
+    "pr": {"type": "integer"},
+    "head_sha": {"type": "string"},
+    "base_sha": {"type": "string"},
+    "decision": {"enum": ["approve", "hold"]},
+    "summary_zh": {"type": "string"},
+    "findings": {"type": "array", "items": {"type": "object", "additionalProperties": false,
+      "required": ["severity", "message_zh"], "properties": {"severity": {"enum": ["blocker", "warning", "info"]}, "message_zh": {"type": "string"}}}},
+    "waivers": {"type": "array", "items": {"enum": ["bad_format", "outside_dir", "no_screenshot"]}},
+    "waiver_reason_zh": {"type": "string"},
+    "verified_by_execution": {"const": false, "type": "boolean"}
+  }
+}
