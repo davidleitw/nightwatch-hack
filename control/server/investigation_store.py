@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from nightwatch_agent.report import REPORT_VERSION
+
 
 Json = dict[str, Any]
 TERMINAL = {"completed", "failed", "interrupted"}
@@ -165,10 +167,14 @@ class InvestigationStore:
     @staticmethod
     def _report(investigation_id: str, outcome: str, summary_zh: str, started_at: str,
                 closed_at: str, agent_report: Json | None, evidence: list[Json], limitations: list[str]) -> Json:
+        investigation_report = agent_report if agent_report and agent_report.get("schema_version") == REPORT_VERSION else None
+        if investigation_report:
+            limitations = [*limitations, *investigation_report["limitations"]]
         return {
             "investigation_id": investigation_id, "outcome": outcome, "summary_zh": summary_zh,
             "started_at": started_at, "closed_at": closed_at,
-            "agent_report": copy.deepcopy(agent_report),
+            "agent_report": None if investigation_report else copy.deepcopy(agent_report),
+            "investigation_report": copy.deepcopy(investigation_report),
             "evidence_ids": [item["id"] for item in evidence if isinstance(item, dict) and "id" in item],
             "limitations": list(dict.fromkeys(limitations)),
         }
@@ -207,8 +213,8 @@ class InvestigationStore:
         with self._mutex, self.db:
             if self.db.execute("SELECT 1 FROM sessions WHERE id=? AND status='running'", (investigation_id,)).fetchone() is None:
                 return
-            self.db.execute("UPDATE sessions SET context_json=?, context_available=1, context_complete=? WHERE id=?",
-                            (json_text(context), int(complete), investigation_id))
+            self.db.execute("UPDATE sessions SET context_json=?, usage_json=?, context_available=1, context_complete=? WHERE id=?",
+                            (json_text(context), json_text(context.get("usage", {})), int(complete), investigation_id))
 
     def append_event(self, investigation_id: str, event_type: str, payload: Json) -> Json:
         with self._mutex, self.db:
@@ -237,6 +243,7 @@ class InvestigationStore:
                 # Tool observations are persisted before the model returns.
                 # A cancelled/failed runner may still hold an empty result list.
                 evidence = json.loads(row["evidence_json"])
+                usage = json.loads(row["usage_json"])
             closed = now()
             actual_report = self._report(investigation_id, outcome, summary_zh, row["started_at"], closed,
                                           report, evidence, limitations)
@@ -279,6 +286,32 @@ class InvestigationStore:
             if row is None:
                 return None
             return {"complete": bool(row["context_complete"]), "context": json.loads(row["context_json"])}
+
+    def export(self, investigation_id: str) -> Json | None:
+        """Take a consistent bundle under the same lock used by all session writes."""
+        with self._mutex:
+            detail = self.detail(investigation_id)
+            if detail is None:
+                return None
+            context = self.context(investigation_id)
+            rows = self.db.execute(
+                "SELECT cursor, investigation_id, seq, type, at, payload_json FROM events WHERE investigation_id=? ORDER BY seq",
+                (investigation_id,),
+            ).fetchall()
+            events = [{"cursor": row["cursor"], "investigation_id": row["investigation_id"],
+                       "seq": row["seq"], "type": row["type"], "at": row["at"],
+                       "payload": json.loads(row["payload_json"])} for row in rows]
+            session = {key: value for key, value in detail.items()
+                       if key not in {"report", "evidence", "usage"}}
+            return {
+                "schema_version": "nightwatch.investigation-export.v1",
+                "exported_at": now(), "complete": bool(detail["closed_at"] and context["complete"]),
+                "session": session,
+                "session_start": next((event for event in events if event["type"] == "investigation.started"), None),
+                "session_end": next((event for event in reversed(events) if event["type"] == "investigation.finished"), None),
+                "report": detail["report"], "context": context,
+                "events": events, "evidence": detail["evidence"], "usage": detail["usage"],
+            }
 
     def list(self, limit: int, before: int | None = None) -> Json:
         with self._mutex:

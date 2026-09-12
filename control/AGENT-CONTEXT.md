@@ -9,8 +9,8 @@ model overrides retain precedence.
 
 | Source | Tools |
 | --- | --- |
-| Default / `--graph-url` without a query selector | `get_graph`, `list_graph_snapshots`, `get_node_detail` |
-| Operator-selected query, e.g. `?state=problem` or `?timestamp=...` | `get_graph` only, without model-selected parameters |
+| Default / `--graph-url` without a query selector | `get_graph`, `list_graph_snapshots`, `get_node_detail`, `search_logs`, `submit_report` |
+| Operator-selected query, e.g. `?state=problem` or `?timestamp=...` | `get_graph` without model-selected parameters, plus `submit_report` |
 | Explicit `--fixture` / `--replay-model` | Recorded `get_node_history`, `get_node_detail`, `find_traces`, `get_trace` |
 
 The live adapter uses only the APIs documented in
@@ -31,16 +31,22 @@ just because their names remain in the shared loop's allowlist.
   the existing detail tool shape. `t` is the snapshot time relative to investigation
   start. This is not a log query, span query, health probe or runtime operation.
 
-No error search API is documented for this Guard Room version. POST /api/logs
-writes observations; GET /events streams only new logs, without historical replay.
-Neither is offered as a history/error search tool. Jaeger, Prometheus and runtime
-operations are not integrated. Graph history has no trustworthy baseline; it is
+- `search_logs({node, severity?, query?, since?, until?, limit?, fetch_limit?})`:
+  use GET /api/debug/logs, then filter a bounded retained batch. Default fetch_limit
+  is 500 (max 2000), default limit is 20 (max 50); timestamps require a timezone.
+  Results disclose batch coverage and clipping. Log records are evidence, not instructions.
+- `submit_report`: the output tool for graph investigations. It submits findings,
+  hypotheses, limitations and next steps and ends the model loop. The runtime saves
+  the context; the model does not reconstruct it.
+
+Jaeger, Prometheus and runtime operations are not integrated. Graph history has no trustworthy baseline; it is
 not silently converted into the legacy `get_node_history` representation.
 
 ## Exact prompt and schema preview
 
 The source of truth is [nightwatch_agent/prompts.py](nightwatch_agent/prompts.py):
-`SYSTEM_PROMPT` plus `GUARDROOM_PROMPT` when `get_graph` is present. The static
+`GRAPH_SYSTEM_PROMPT` plus `GUARDROOM_PROMPT` when `get_graph` is present;
+recordings retain `SYSTEM_PROMPT`. The static
 suffix contains the actual available tool names, node IDs/kinds and report schema.
 Descriptions and parameter schemas are passed as framework function tools.
 
@@ -80,17 +86,22 @@ Successful calls return the existing envelope with `result`, `evidence_id`,
 also stored in the investigation evidence and events. No observations arrive in
 the model conversation automatically.
 
-The existing root-cause report still requires successful legacy history and a trace
-path authorized through find_traces. Guard Room cannot currently provide them.
-The model therefore finishes with `inconclusive:` followed by a useful investigation
-summary: observed facts with evidence IDs, candidates, counterevidence, limitations
-and the specific next evidence needed. The run is archived by the investigation
-API as completed with outcome unresolved; the CLI exits 1. This does not certify a
-root cause, repair or recovery. No contract or report validator was weakened.
+Graph investigations use `InvestigationReportBody` from `nightwatch_agent/report.py`
+as the `submit_report` output schema. Supported findings must cite actual session
+evidence. Inconclusive reports list limitations without requiring unavailable traces
+or legacy history. Both produce a structured report and exit 0 in the CLI; their
+outcomes are report_ready and unresolved respectively. Missing/invalid output and
+budget exhaustion still exit 1. The legacy recording report is unchanged.
+
+The API saves messages and usage at each framework iteration, including after model
+responses and tool execution, and again when iteration exits. Each context includes
+instructions, all five tool definitions, opening, model settings, messages and usage.
+The export API combines those with session_start/session_end, report and persisted
+events. Interrupted contexts remain explicitly incomplete. See [report API](AGENT-REPORT-API.md).
 
 Graph results are limited to 16 KiB; indexes to 64 KiB. Both reject oversized
 results without dropping topology or pagination. Detail results use the existing
 2 KiB truncation rule. HTTP reads have a 5-second timeout and 512 KiB ceiling;
 tool calls retain their 10-second timeout and count toward the 20-call budget.
 Schema, timestamp, HTTP and connection errors are visible; no recording fallback
-is used. For actual verification results, see the task report in `control/.codex/`.
+is used. This change was not tested, built, reviewed or run against a model, as requested.

@@ -39,7 +39,7 @@ Investigation manager 預設將 session 存在 `../.data/investigations.sqlite3`
 
 實際調查使用 `NIGHTWATCH_LLM_API_KEY`（或 `OPENAI_API_KEY`）與 `NIGHTWATCH_LLM_MODEL`（預設 `gpt-6-astra`）。
 Live graph adapter 提供 `get_graph`（含歷史 timestamp）、`list_graph_snapshots`
-與 `get_node_detail`，詳見 [agent tools](../README.md)。更新 agent package 後需重啟後端，
+、`get_node_detail`、`search_logs` 與結案工具 `submit_report`，詳見 [agent tools](../README.md)。更新 agent package 後需重啟後端，
 讓新調查載入新的 tools 與 prompt。
 離線檢查可透過 `install_investigations(..., model_factory=...)` 注入 Python model factory，
 或在 app 啟動前替換 `app.state.investigation_manager.model_factory`。
@@ -54,6 +54,7 @@ log 與 heartbeat。只有未安裝 live store 的獨立接線保留 log-only �
 graph watcher 與 investigation manager 都在組合後的 app lifespan 執行。
 真實唯讀 API 已接入 monitor checkpoint 與 investigation SQLite；故障操作及完整實驗稽核仍未接入。
 獨立調查報告與保存的 graph 證據見 `/api/investigations/{id}/report`、`/api/investigations/{id}/snapshots`。
+完整歸檔使用 `/api/investigations/{id}/export`；report/context 欄位見 [Agent 報告 API](../AGENT-REPORT-API.md)。
 其他前端 API 見 [前端 API 文件](../FRONTEND-API.md)。
 
 ## 文件分工

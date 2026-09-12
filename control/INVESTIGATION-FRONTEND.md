@@ -154,9 +154,23 @@ Session lifecycle and conclusion are separate:
 | failed | Execution/configuration failed; a report describes the failure |
 | interrupted | Shutdown/restart interrupted execution; partial context and evidence remain |
 
-The current graph-only agent has no connected history/log/trace tools. Its existing
-root-cause validator therefore cannot accept a root-cause report from one graph.
-An unresolved report is a valid archived investigation, not a missing report.
+Graph investigations now use submit_report and can save structured inconclusive
+reports without legacy history or trace requirements. The new body is in
+report.investigation_report; report.agent_report is reserved for older recording
+reports. Existing clients can still display summary_zh and limitations when
+agent_report is null. Full field definitions are in [AGENT-REPORT-API.md](AGENT-REPORT-API.md).
+
+GET /api/investigations/{id}/export returns the saved session, report, context,
+events, evidence and usage in one consistent bundle. It includes session_start and
+session_end as the actual persisted lifecycle events. Running sessions are partial.
+The context and usage are checkpointed at each framework iteration, so a crash
+retains the last completed checkpoint rather than only the initial prompt.
+
+A report.submitted investigation event records a validated output-tool submission;
+its payload.call_id pairs with submit_report's tool.started. Wait for
+investigation.finished before fetching the terminal report: submission is not an
+archive-completion signal. Older frontends may ignore report.submitted and refresh
+on investigation.finished.
 
 ## Coexistence with existing APIs
 

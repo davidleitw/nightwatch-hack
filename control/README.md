@@ -13,6 +13,8 @@ CLI 與現有 FastAPI investigation manager 使用同一個 Guard Room adapter�
 | `get_graph({timestamp?})` | `GET /api/graph` 或 `GET /api/graph?timestamp=...` | 先看全圖，再比較指定時間的節點量測與依賴關係 |
 | `list_graph_snapshots({limit?, before_seq?})` | `GET /api/graph/snapshots` | 找到有保存資料的時間；取回的 `at` 可交給 `get_graph` |
 | `get_node_detail({node})` | `GET /api/graph`，投影指定節點及進出邊 | 聚焦候選節點的當前量測、資源欄位及依賴；不是另一條 HTTP endpoint |
+| `search_logs({node, severity?, query?, since?, until?, limit?, fetch_limit?})` | `GET /api/debug/logs?service=...&limit=...` | 搜尋近期保留日誌，依文字、嚴重度與時間篩選 |
+| `submit_report(...)` | PydanticAI output tool；不是 HTTP 寫入工具 | 提交結構化調查結果，後端自動歸檔完整 context |
 
 `limit` 為 1–500（預設 100）。歷史索引保留 API 的 `snapshots`、`seq`、`at`、
 `next_before_seq` 欄位，下一頁用 `before_seq=next_before_seq`。時間必須含時區，
@@ -24,7 +26,7 @@ URL 編碼由 adapter 負責。查詢回傳不晚於指定時間的最後一份�
 不刪掉拓撲或分頁資料。單次 HTTP timeout 5 秒、回應上限 512 KiB，工具共用 10 秒 timeout。
 
 **沒有接上的工具不會提供給模型。** 舊程式還保留錄影／其他 adapter 的工具名稱，
-但 live Guard Room 不提供 `find_traces`、`get_trace`、`search_logs`、`query_metric`、
+但 live Guard Room 不提供 `find_traces`、`get_trace`、`query_metric`、
 `run_health_check`、`inspect_runtime`、`list_errors`、`get_node_errors`。
 README 的 `POST /api/logs` 是寫入，`GET /events` 是無歷史回放的 live SSE，
 兩者都不是供排查用的歷史錯誤查詢 API。
@@ -37,16 +39,27 @@ README 的 `POST /api/logs` 是寫入，`GET /events` 是無歷史回放的 live
 1. 讀目前 graph，判讀來源新鮮度、哪些節點確實有完成呼叫及哪些量測缺失。
 2. 查歷史索引，選幾個有用的前後時間，讀取 graph 比較候選節點與呼叫端的變化。
 3. 有需要時讀節點詳情，整理候選原因、反證、可觀測的變化時間範圍與缺少的證據。
-4. 以實際 evidence ID 引用結果；證據不足仍完成有內容的調查摘要。
+4. 用 `search_logs` 查候選節點的近期日誌，辨識錯誤文字與反證。
+5. 以實際 evidence ID 呼叫 `submit_report`；證據不足也提交結構化報告。
 
 Prompt 特別區分 Guard Room 的量測語意：`alive=false` 表示窗口內沒事件，不等於
 服務死亡；edge 是 config 宣告且尚無量測；Prometheus／Jaeger 尚未整合；
 `null` 不等於零；巢狀 monitor 次數不等於受影響顧客數。完整文字與工具描述在
 [nightwatch_agent/prompts.py](nightwatch_agent/prompts.py)。
 
-舊根因報告仍要求成功的 history 與 trace。現有 Guard Room 無法提供 trace，
-所以這輪完成後會回 `inconclusive:` 調查摘要、`status=unresolved`（CLI exit 1），
-不會宣稱確認根因或完成修復。HTTP investigation 仍會完成、保存證據與報告。
+Graph 調查使用獨立的 `submit_report` 格式，不再強制要求舊 history／trace。
+報告列出 findings、hypotheses、limitations、next_steps；`conclusion` 為 supported 或 inconclusive。
+仍檢查節點與證據 ID，supported 必須有引用證據的 finding，inconclusive 必須說明限制。
+兩者都有結構化報告，HTTP outcome 分別為 report_ready／unresolved，CLI 都以 exit 0 結束；
+没有交出有效報告、逾時或執行失敗仍 exit 1。這不代表服務修復。
+完整欄位、context 與 export API 見 [AGENT-REPORT-API.md](AGENT-REPORT-API.md)。
+
+`search_logs` 預設抓最新 500 筆、最多 2000 筆，再於該批內篩選；預設回 20 筆、最多 50 筆。
+時間需含時區，query 為不分大小寫的文字包含比對；WARNING 與 WARN 視為同級。
+來源 checkpoint 全部節點合計最多保留 10000 個事件，不提供日誌分頁或完整歷史保證。
+結果包含 scanned_count、matched_count_in_batch、returned_count、scanned_from/to、
+api_limit_reached 與 truncated；沒有符合項目不表示沒有故障。
+日誌最多回傳約 15 KiB 的完整記錄，過大時移除較舊匹配並標示截斷；單筆過大則回工具錯誤。
 
 ## 執行
 
@@ -89,7 +102,7 @@ bash control/run-agent.sh --graph-url 'http://127.0.0.1:8001/api/graph?state=pro
 
 錄影模式只提供錄下的 history、detail、find_traces、get_trace 四個工具；
 未錄下的查詢失敗。`--replay-model` 不連外，既有錄影因 trace path 為空回 unresolved。
-帶 operator query 的 graph URL（demo／固定歷史）只提供 `get_graph({})`，
+帶 operator query 的 graph URL（demo／固定歷史）提供 `get_graph({})` 與 `submit_report`，
 不與 live 歷史混用。假設：不帶 query 的 Guard Room URL 使用 README 的 monitor API。
 
 ## 開發與驗證
@@ -105,3 +118,5 @@ uv build --offline --python .venv/bin/python
 
 一次調查的預算仍為 20 次工具、900 秒、400,000 tokens。工具錯誤計次；
 回傳過大的節點詳情會加 `truncated`。每輪有獨立的對話與證據，不沿用舊結論。
+
+本次工具／報告改動依使用者指示未執行測試、build、review、CLI 或真模型 API 驗證。

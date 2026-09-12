@@ -11,6 +11,7 @@ from .graph import GraphAPI
 from .loop import Investigation, Limits, encode, investigate, safe_error, static_instructions
 from .prompts import tool_description
 from .replay import Recording
+from .report import submit_definition
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -29,7 +30,7 @@ async def run(args: argparse.Namespace) -> int:
             "tools": [
                 {"name": definition["name"], "description": tool_description(definition), "parameters": definition["parameters"]}
                 for definition in data.capabilities["tools"]
-            ],
+            ] + ([submit_definition()] if isinstance(data, GraphAPI) else []),
             "opening": {**data.opening, "budget": state.budget()},
         }, ensure_ascii=False, indent=2))
         return 0
@@ -62,7 +63,7 @@ async def run(args: argparse.Namespace) -> int:
         "status": result.status, "reason": result.reason, "report": result.report,
         "evidence_count": len(result.evidence), "usage": result.usage,
     }))
-    return 0 if result.status == "report_ready" else 1
+    return 0 if result.status == "report_ready" or (isinstance(data, GraphAPI) and result.report is not None) else 1
 
 
 def main() -> None:

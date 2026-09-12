@@ -24,6 +24,7 @@ from investigation_store import ActiveInvestigation, InvestigationStore, Request
 from nightwatch_agent.graph import GraphAPI
 from nightwatch_agent.loop import Limits, investigate, safe_error
 from nightwatch_agent.prompts import tool_description
+from nightwatch_agent.report import InvestigationReportBody
 
 
 Json = dict[str, Any]
@@ -64,6 +65,10 @@ class InvestigationSummary(BaseModel):
     event_seq: int
 
 
+class SavedInvestigationReport(InvestigationReportBody):
+    schema_version: Literal["nightwatch.investigation-report.v1"]
+
+
 class InvestigationReport(BaseModel):
     investigation_id: str
     outcome: str
@@ -71,6 +76,7 @@ class InvestigationReport(BaseModel):
     started_at: str
     closed_at: str
     agent_report: dict[str, Any] | None
+    investigation_report: SavedInvestigationReport | None = None
     evidence_ids: list[str]
     limitations: list[str]
 
@@ -89,7 +95,7 @@ class InvestigationEvent(BaseModel):
     cursor: int
     investigation_id: str
     seq: int
-    type: Literal["investigation.started", "tool.started", "observation.recorded", "tool.failed", "investigation.finished"]
+    type: Literal["investigation.started", "tool.started", "observation.recorded", "tool.failed", "report.submitted", "investigation.finished"]
     at: str
     payload: dict[str, Any]
 
@@ -129,6 +135,20 @@ class InvestigationSnapshots(BaseModel):
 class InvestigationContext(BaseModel):
     complete: bool
     context: dict[str, Any]
+
+
+class InvestigationExport(BaseModel):
+    schema_version: Literal["nightwatch.investigation-export.v1"]
+    exported_at: str
+    complete: bool
+    session: dict[str, Any]
+    session_start: InvestigationEvent | None
+    session_end: InvestigationEvent | None
+    report: InvestigationReport | None
+    context: InvestigationContext
+    events: list[InvestigationEvent]
+    evidence: list[dict[str, Any]]
+    usage: dict[str, Any]
 
 
 def _timestamp() -> str:
@@ -285,8 +305,8 @@ class InvestigationManager:
             if context is not None:
                 context["messages"] = context.get("messages", [])
             limitations = []
-            if result.status == "unresolved":
-                limitations.append("目前提供 graph 觀測與已宣告的快照查詢工具；沒有錯誤日誌查詢、trace、可信基線或 runtime 資料，無法確認根因。")
+            if result.report is None:
+                limitations.append("模型未提交有效的結構化調查報告；原因與已取得證據仍保存。")
             if data.opening.get("mode") == "graph_api":
                 limitations.append("觀測來源是設定的 Guard Room API；alive 表示窗口內有事件，不等同服務探活。資料是否新鮮依快照時間及來源欄位判讀。")
             self.store.finish(investigation_id, "completed", result.status, result.reason, result.report,
@@ -428,6 +448,16 @@ def install_investigations(app, *, model_factory: Callable[[], Any] | None = Non
             raise InvestigationAPIError(404, "not_found", "找不到這件調查")
         return JSONResponse(value, headers=headers)
 
+    async def export(request: Request):
+        _query(request, set())
+        identifier = request.path_params["id"]
+        if not identifier.strip():
+            raise InvestigationAPIError(400, "invalid_request", "id 不可為空")
+        value = manager.store.export(identifier)
+        if value is None:
+            raise InvestigationAPIError(404, "not_found", "找不到這件調查")
+        return JSONResponse(value, headers=headers)
+
     async def stream(request: Request):
         query = _query(request, {"after"})
         query_after = _integer(query["after"], name="after", minimum=0) if "after" in query else None
@@ -505,6 +535,10 @@ def install_investigations(app, *, model_factory: Callable[[], Any] | None = Non
                       responses={404: {"description": "Unknown investigation"}, 409: {"description": "Investigation still running"}})
     app.add_api_route("/api/investigations/{id}/snapshots", snapshots, methods=["GET"], response_model=InvestigationSnapshots,
                       tags=["Investigations"], summary="Read exact graph snapshots retained as investigation evidence")
+
+    app.add_api_route("/api/investigations/{id}/export", export, methods=["GET"], response_model=InvestigationExport,
+                      tags=["Investigations"], summary="Export session, report, transcript, events, evidence and usage",
+                      description="Returns saved data only. Running or interrupted sessions are marked incomplete; does not invoke the model or refresh observations.")
 
     @app.exception_handler(InvestigationAPIError)
     async def investigation_error(request: Request, error: APIError):
