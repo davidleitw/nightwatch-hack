@@ -103,6 +103,20 @@ services:
       timeout: 3s
       retries: 5
 
+  traffic:
+    build: ./traffic
+    image: nightwatch-shop-traffic:local
+    environment:
+      TRAFFIC_BASE_URL: http://backend:8000
+      TRAFFIC_INTERVAL_SECONDS: ${TRAFFIC_INTERVAL_SECONDS:-10}
+      TRAFFIC_CHECKOUT_PROBABILITY: ${TRAFFIC_CHECKOUT_PROBABILITY:-0.2}
+      TRAFFIC_REQUEST_TIMEOUT_SECONDS: ${TRAFFIC_REQUEST_TIMEOUT_SECONDS:-12}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   shop-data:
   shop-logs:
