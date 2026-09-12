@@ -253,3 +253,34 @@ body{min-width:0}header{background:#fff;height:62px;gap:36px;padding:0 24px}.bra
 .topology-panel:has(.topology-modern) .node-metrics{gap:24px}
 @media(max-width:760px){#graph-viewport.topology-modern{height:460px}}
 @media(prefers-reduced-motion:reduce){.topology-modern .graph-node{transition:none}}
+
+/* A modal fills the browser viewport and keeps the existing live graph DOM. */
+#graph-fullscreen{display:inline-flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap}
+#graph-fullscreen svg{width:15px;height:15px;flex:none}
+body.graph-fullscreen-open{overflow:hidden}
+#graph-fullscreen-dialog{position:fixed;inset:0;width:100%;height:100dvh;max-width:none;max-height:none;margin:0;padding:0;border:0;background:var(--panel);color:var(--text);overflow:hidden}
+#graph-fullscreen-dialog::backdrop{background:#f5f8f7}
+#graph-fullscreen-dialog .topology-panel{display:flex;flex-direction:column;width:100%;height:100%;border:0;border-radius:0;box-shadow:none}
+#graph-fullscreen-dialog .panel-header{flex:none;padding:12px 20px;display:flex;align-items:center;gap:16px}
+#graph-fullscreen-dialog .graph-controls{margin-top:0}
+#graph-fullscreen-dialog .legend{flex:none;padding:8px 20px}
+#graph-fullscreen-dialog .assessment-legend{display:none}
+#graph-fullscreen-dialog #graph-viewport{flex:1;min-height:100px;height:auto}
+#graph-fullscreen-dialog .graph-caption{flex:none;padding:8px 20px}
+#graph-fullscreen-dialog #node-detail{flex:none;max-height:145px;min-height:0;overflow:auto;padding:10px 20px}
+#graph-fullscreen-dialog .node-metrics{margin-top:8px}
+#graph-fullscreen-dialog #node-detail .report-note{margin:4px 0}
+#graph-fullscreen-dialog #sources{display:none}
+#graph-fullscreen-dialog #graph-timeline{flex:none;display:grid;grid-template-columns:minmax(200px,1fr) minmax(280px,2fr);column-gap:28px;row-gap:3px;padding:10px 20px;max-height:28vh;overflow:auto}
+#graph-fullscreen-dialog .timeline-heading{grid-column:1;grid-row:1}
+#graph-fullscreen-dialog #graph-view-time{grid-column:1;grid-row:2 / 5;margin:4px 0;font-size:11px}
+#graph-fullscreen-dialog .timeline-controls{grid-column:2;grid-row:1}
+#graph-fullscreen-dialog #snapshot-range{grid-column:2;grid-row:2;margin:0}
+#graph-fullscreen-dialog .snapshot-ticks{grid-column:2;grid-row:3;margin-bottom:0}
+#graph-fullscreen-dialog .timeline-bounds{grid-column:2;grid-row:4}
+#graph-fullscreen-dialog #snapshot-note,#graph-fullscreen-dialog #snapshot-error{grid-column:1 / -1;margin:4px 0 0}
+#graph-fullscreen-dialog #snapshot-note{font-size:10px}
+#graph-fullscreen-dialog #graph-fullscreen{color:#356b58;background:#edf5f0;border-color:#b6cdbf}
+@media(max-width:1000px){#graph-fullscreen-dialog .panel-header{display:block}#graph-fullscreen-dialog .graph-controls{margin-top:10px}#graph-fullscreen-dialog #node-detail{max-height:120px}}
+@media(max-height:600px){#graph-fullscreen-dialog #node-detail{max-height:85px}#graph-fullscreen-dialog .graph-caption{display:none}}
+@media(max-width:700px){#graph-fullscreen-dialog #graph-timeline{display:block;padding:8px 16px;max-height:32vh}#graph-fullscreen-dialog .timeline-controls{margin-top:6px}}

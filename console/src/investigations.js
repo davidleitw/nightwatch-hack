@@ -40,6 +40,65 @@ let showAllNodes = false, journalTimer = null, renderedNodesKey = '', renderedNo
 let selectedDetailTab = 'report', lastChatId = null, messageReplay = true;
 let journalFilter = 'all', posting = false, pendingRequest = null, refreshBusy = false;
 const storageKey = 'nightwatch.investigation.pending.v1';
+let graphDialog = null, graphRestore = null;
+let graphResizeObserver = null, graphResizeFrame = null;
+
+function setupGraphFullscreen() {
+  const panel = $('graph-viewport').closest('.topology-panel');
+  const anchor = document.createComment('Topology panel position');
+  panel.before(anchor);
+  graphDialog = document.createElement('dialog');
+  graphDialog.id = 'graph-fullscreen-dialog';
+  graphDialog.setAttribute('aria-label', '全螢幕服務拓樸');
+  document.body.append(graphDialog);
+  $('fit').insertAdjacentHTML('afterend', '<button id="graph-fullscreen" type="button" aria-haspopup="dialog" aria-expanded="false" title="全螢幕檢視拓樸"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5"/></svg><span>全螢幕</span></button>');
+  const button = $('graph-fullscreen');
+  button.onclick = () => {
+    if (graphDialog.open) { graphDialog.close(); restore(); return; }
+    const viewport = $('graph-viewport');
+    graphRestore = {zoom, fit, left: viewport.scrollLeft, top: viewport.scrollTop};
+    graphDialog.append(panel);
+    document.body.classList.add('graph-fullscreen-open');
+    button.setAttribute('aria-expanded', 'true');
+    button.querySelector('span').textContent = '離開全螢幕';
+    button.title = '離開全螢幕（Esc）';
+    graphDialog.showModal();
+    fit = true;
+    renderGraph();
+    viewport.scrollTo(0, 0);
+    button.focus({preventScroll: true});
+  };
+  function restore() {
+    if (!graphRestore) return;
+    anchor.after(panel);
+    document.body.classList.remove('graph-fullscreen-open');
+    button.setAttribute('aria-expanded', 'false');
+    button.querySelector('span').textContent = '全螢幕';
+    button.title = '全螢幕檢視拓樸';
+    if (graphRestore) {
+      zoom = graphRestore.zoom; fit = graphRestore.fit;
+      renderGraph();
+      $('graph-viewport').scrollTo(graphRestore.left, graphRestore.top);
+      graphRestore = null;
+    }
+    button.focus({preventScroll: true});
+  }
+  graphDialog.addEventListener('cancel', event => {
+    event.preventDefault(); graphDialog.close(); restore();
+  });
+  graphDialog.addEventListener('close', () => {
+    // A close event is queued; it must not undo a subsequently reopened dialog.
+    if (!graphDialog.open) restore();
+  });
+  graphResizeObserver = new ResizeObserver(() => {
+    if (!graphDialog.open || !fit || disposed || graphResizeFrame !== null) return;
+    graphResizeFrame = requestAnimationFrame(() => {
+      graphResizeFrame = null;
+      if (graphDialog.open && fit && !disposed) renderGraph();
+    });
+  });
+  graphResizeObserver.observe($('graph-viewport'));
+}
 
 const localTime = value => Number.isFinite(typeof value === 'number' ? value : Date.parse(value)) ? new Intl.DateTimeFormat('zh-TW', {timeZone: 'Asia/Taipei', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'}).format(new Date(value)) : '—';
 let liveGraph = null, liveReceivedAt = null, viewingHistory = false;
@@ -290,7 +349,10 @@ function renderGraph() {
   const cardWidth = 204, cardHeight = 144, columnGap = 64, rowStep = 88;
   const width = Math.max(1, ...layout.map(n => n.layout.col + 1)) * (cardWidth + columnGap) - columnGap + 64;
   const height = Math.max(0, ...layout.map(n => n.layout.row)) * rowStep + cardHeight + 100;
-  if (fit) zoom = Math.max(.65, Math.min(1, ($('graph-viewport').clientWidth - 24) / width));
+  if (fit) {
+    const viewport = $('graph-viewport');
+    zoom = Math.max(.01, Math.min(1, (viewport.clientWidth - 24) / width, (viewport.clientHeight - 24) / height));
+  }
   const positions = new Map(layout.map(n => [n.id, {x: 32 + n.layout.col * (cardWidth + columnGap), y: 64 + n.layout.row * rowStep}]));
   const search = $('node-search').value.toLowerCase().trim(), selectedHealth = $('health-filter').value;
   const matches = new Set(view.nodes.filter(n => (!search || n.id.toLowerCase().includes(search)) && (selectedHealth === 'all' || n.status === selectedHealth)).map(n => n.id));
@@ -682,6 +744,7 @@ async function loadContext(id) {
   finally { if (selectedHistory === id && generation === detailGeneration && $('load-context')) $('load-context').disabled = false; }
 }
 function route() {
+  if (graphDialog?.open) graphDialog.close();
   const parts = location.hash.slice(1).split('/');
   const list = parts[0] === 'investigations' || parts[0] === 'incidents';
   const usage = parts[0] === 'usage';
@@ -832,6 +895,7 @@ function visibilityChanged() {
   }
 }
 function dispose() {
+  graphResizeObserver?.disconnect(); cancelAnimationFrame(graphResizeFrame);
   disposed = true; pauseStreams(); clearInterval(heartbeatTimer); clearTimeout(journalTimer); journalTimer = null;
   clearInterval(snapshotPoll); cancelSnapshot(); snapshotIndexController?.abort();
   document.removeEventListener('visibilitychange', visibilityChanged);
@@ -889,9 +953,10 @@ export function startWorkspace() {
   $('node-search').insertAdjacentHTML('beforebegin', '<label class="graph-scope-toggle"><input id="show-all-nodes" type="checkbox"> 全部觀測點</label>');
   $('show-all-nodes').onchange = event => { showAllNodes = event.target.checked; renderGraph(); };
   $('node-search').oninput = renderGraph; $('health-filter').onchange = renderGraph;
-  $('zoom-in').onclick = () => { fit = false; zoom = Math.min(1.5, zoom + .1); renderGraph(); };
-  $('zoom-out').onclick = () => { fit = false; zoom = Math.max(.5, zoom - .1); renderGraph(); };
-  $('fit').onclick = () => { fit = true; renderGraph(); };
+  $('zoom-in').onclick = () => { fit = false; zoom = Math.min(2, zoom * 1.2); renderGraph(); };
+  $('zoom-out').onclick = () => { fit = false; zoom = Math.max(.01, zoom / 1.2); renderGraph(); };
+  $('fit').onclick = () => { fit = true; renderGraph(); $('graph-viewport').scrollTo(0, 0); };
+  setupGraphFullscreen();
   $('refresh').onclick = refresh; $('start-investigation').onclick = startInvestigation;
   document.querySelector('footer span:last-child').textContent = 'NightWatch · 調查由後端執行';
   try {
