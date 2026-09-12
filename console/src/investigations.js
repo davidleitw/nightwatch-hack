@@ -350,7 +350,11 @@ function connectLogs() {
     if (log.schema_version !== 'nightwatch.log.v1' || typeof log.event_id !== 'string' || !log.event_id || typeof log.monitor_id !== 'string' || !log.monitor_id || typeof log.message !== 'string' || !Number.isFinite(Date.parse(log.occurred_at)) || !['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL'].includes(log.level) || !Array.isArray(log.refs?.node_ids) || log.refs.node_ids.some(id => typeof id !== 'string')) throw new Error('不符合 nightwatch.log.v1。');
     logs.set(JSON.stringify([log.monitor_id, log.event_id]), log); renderCurrent();
   }));
-  events.addEventListener('ping', receive(value => { if (!Number.isFinite(Date.parse(value.server_now))) throw new Error('ping 缺少 server_now。'); }));
+  events.addEventListener('ping', receive(value => {
+    // Monitor /events sends an empty heartbeat, independently of investigation SSE.
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('ping 必須是物件。');
+    if ('server_now' in value && !Number.isFinite(Date.parse(value.server_now))) throw new Error('ping 的 server_now 格式錯誤。');
+  }));
   events.onerror = () => { if (logStream === events) reconnectLogs(); };
 }
 function dispose() {
