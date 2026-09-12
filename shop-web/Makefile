@@ -21,10 +21,10 @@ rebuild: ## 不使用快取重新建置 images
 up: ## 建置並於背景啟動兩個 containers
 	$(COMPOSE) -p $(PROJECT_NAME) -f compose.yaml up -d --build
 
-down: ## 移除 containers 與網路，保留訂單 volume
+down: ## 移除 containers 與網路，保留資料 volumes
 	$(COMPOSE) -p $(PROJECT_NAME) -f compose.yaml down
 
-stop: ## 停止 containers，保留 containers 與資料
+stop: ## 停止 containers，保留 containers 與資料 volumes
 	$(COMPOSE) -p $(PROJECT_NAME) -f compose.yaml stop
 
 restart: ## 重新啟動 containers（程式變更請用 make up）
@@ -46,6 +46,6 @@ smoke: ## 驗證前端首頁與經過 Nginx 的 API
 	curl --fail --silent --show-error http://localhost:$(FRONTEND_PORT)/ -o /dev/null
 	curl --fail --silent --show-error http://localhost:$(FRONTEND_PORT)/api/health
 
-clean: ## 刪除 containers、網路與所有訂單資料，需 CONFIRM=yes
-	@test "$(CONFIRM)" = "yes" || (echo '將永久刪除訂單。確認請執行 make clean CONFIRM=yes'; exit 1)
+clean: ## 刪除 containers、網路與所有資料 volumes，需 CONFIRM=yes
+	@test "$(CONFIRM)" = "yes" || (echo '將永久刪除訂單與 logs。確認請執行 make clean CONFIRM=yes'; exit 1)
 	$(COMPOSE) -p $(PROJECT_NAME) -f compose.yaml down --volumes --remove-orphans

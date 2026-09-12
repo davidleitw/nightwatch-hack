@@ -4,8 +4,12 @@ services:
     build: ./backend
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    environment:
+      LOG_DIR: /logs
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - shop-data:/data
+      - shop-logs:/logs
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
@@ -28,3 +32,4 @@ services:
       retries: 5
 volumes:
   shop-data:
+  shop-logs:
