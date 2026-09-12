@@ -3,7 +3,7 @@ import {validateGraph} from './data.js';
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const integer = value => Number.isSafeInteger(value) && value >= 0;
 const statuses = ['running', 'completed', 'failed', 'interrupted'];
-const types = ['investigation.started', 'tool.started', 'observation.recorded', 'tool.failed', 'report.submitted', 'investigation.finished'];
+const types = ['investigation.started', 'tool.started', 'observation.recorded', 'tool.failed', 'report.submitted', 'investigation.finished', 'agent.output', 'agent.thinking_summary', 'agent.reasoning_status', 'agent.usage'];
 
 // Layout is a local view choice. It is not added to the backend graph payload.
 export function graphLayout(graph) {
@@ -36,6 +36,9 @@ export function validateInvestigationEvent(value) {
   if (!object(value) || typeof value.investigation_id !== 'string' || !value.investigation_id || !integer(value.seq) || value.seq < 1 || !integer(value.cursor) || !types.includes(value.type) || !Number.isFinite(Date.parse(value.at)) || !object(value.payload)) throw new Error('調查事件格式不符。');
   if (['tool.started', 'observation.recorded', 'tool.failed', 'report.submitted'].includes(value.type) && (typeof value.payload.call_id !== 'string' || !value.payload.call_id)) throw new Error('工具事件缺少 payload.call_id，無法配對。');
   if (value.type === 'report.submitted' && (value.payload.tool !== 'submit_report' || !object(value.payload.report))) throw new Error('報告事件缺少 submit_report 或合法 report。');
+  if (value.type === 'agent.reasoning_status' && (typeof value.payload.message_id !== 'string' || !value.payload.message_id || value.payload.status !== 'summary_unavailable')) throw new Error('推理狀態缺少 message_id 或狀態無效。');
+  if (['agent.output', 'agent.thinking_summary'].includes(value.type) && (typeof value.payload.message_id !== 'string' || !value.payload.message_id || typeof value.payload.text !== 'string' || !value.payload.text.trim())) throw new Error('Agent 訊息缺少 message_id 或 text。');
+  if (value.type === 'agent.usage' && !object(value.payload.usage)) throw new Error('Agent 用量事件缺少 usage。');
   return value;
 }
 export async function requestJSON(path, options = {}) {

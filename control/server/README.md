@@ -64,3 +64,17 @@ Graph URL 帶 query 或 `NIGHTWATCH_MOCK_DATA=1` 時停用自動偵測。這只�
 ## 尚未實作
 
 `/api/faults*`、換輪、操作進度、批准與中止只有 mock 實作，live 回 503。舊 `/api/incidents/{id}/report`、`timeline` 缺完整修復稽核，live 回 503；應讀 `/api/investigations/{id}/report`。完整端點清單與觀測限制見 [盤點](../../INTEGRATION.md)。
+
+## 調查對話事件
+
+新的調查將每次模型回覆完成後的文字、公開推理摘要與累計用量保存成 `agent.output`、`agent.thinking_summary`、`agent.usage`。仍使用 `investigation_id`、`seq`、`cursor`、`at`、`payload`；文字 payload 為 `message_id`／`text`，用量 payload 為 `usage`（既有欄位）。這是每次回覆的即時更新，並非逐 token 推播。
+
+SSE `/api/investigations/stream` 以外層 `event: agent` 發出新事件，舊客戶端可略過；原有六種仍是 `event: investigation`，只有後者帶 SSE `id`。新客戶端從兩類 payload 的 `cursor` 保存重連位置，REST 回放不推進串流 cursor。
+
+`GET /api/investigations/{id}/events?include_messages=1` 包含上述新事件；預設仍只回傳舊事件。`next_after` 是底層頁面的 seq，頁面被過濾成空陣列時仍須依非 null 的 `next_after` 繼續讀取。舊調查不補造未保存的訊息。
+
+OpenAI Responses 請求公開 reasoning summary；僅發出 summary 文字，不發出 signature、加密內容或 raw reasoning。模型未提供摘要時不產生假摘要。`submit_report` 保持唯一的 graph 調查結構化結案工具，沿用節點／證據驗證與框架重試；沒有成功 `report.submitted` 就不交付成功報告，額度與錯誤仍明確保存。
+
+前端路由、相容策略與驗收記錄見 [調查對話 spec](../../console/specs/investigation-chat-report.md)。
+
+`agent.reasoning_status` 的 payload 為 `{message_id, status: "summary_unavailable"}`，表示 Responses 回傳了推理項目但沒有可讀摘要；不包含 signature、encrypted_content 或 raw_content。它與其他 agent 訊息一樣保存、回放並使用 SSE `agent` frame。

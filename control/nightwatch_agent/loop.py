@@ -16,7 +16,8 @@ from jsonschema import Draft202012Validator, ValidationError
 from openai import APIError
 from pydantic_ai import Agent, ModelRetry, RunContext, Tool, ToolOutput
 from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior, UsageLimitExceeded
-from pydantic_ai.messages import ModelMessage, ModelResponse
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ThinkingPart
+from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.models import Model
 from pydantic_ai.usage import RunUsage, UsageLimits
 
@@ -306,6 +307,46 @@ async def investigate(
                 "usage": usage_data,
             })
 
+    # Responses ThinkingPart.content is public summary text; encrypted/raw
+    # reasoning remains in the model context and is never a chat event.
+    if graph_mode and isinstance(model, OpenAIResponsesModel):
+        model_settings["openai_reasoning_summary"] = "auto"
+    emitted_parts: set[tuple[int, int]] = set()
+    previous_usage: str | None = None
+
+    def publish_messages() -> None:
+        nonlocal previous_usage
+        for message_index, message in enumerate(messages):
+            if not isinstance(message, ModelResponse):
+                continue
+            for part_index, part in enumerate(message.parts):
+                key = (message_index, part_index)
+                if key in emitted_parts:
+                    continue
+                emitted_parts.add(key)
+                if isinstance(part, TextPart):
+                    event_type = "agent.output"
+                elif isinstance(part, ThinkingPart) and isinstance(agent.model, OpenAIResponsesModel):
+                    if not part.content.strip():
+                        state.emit("agent.reasoning_status", message_id=f"message-{message_index}-{part_index}",
+                                   status="summary_unavailable")
+                        continue
+                    event_type = "agent.thinking_summary"
+                else:
+                    continue
+                if not part.content.strip():
+                    continue
+                text = part.content
+                for name, value in os.environ.items():
+                    if value and (name.endswith("API_KEY") or name.endswith("TOKEN")):
+                        text = text.replace(value, "[REDACTED]")
+                state.emit(event_type, message_id=f"message-{message_index}-{part_index}", text=text)
+        data = usage_summary(usage, messages)
+        encoded = encode(data)
+        if encoded != previous_usage:
+            state.emit("agent.usage", usage=data)
+            previous_usage = encoded
+
     save_context()
     agent = Agent(
         model, deps_type=Investigation,
@@ -350,13 +391,19 @@ async def investigate(
                     async for _node in agent_run:
                         messages = agent_run.all_messages()
                         save_context()
+                        if graph_mode:
+                            publish_messages()
                 finally:
                     messages = agent_run.all_messages()
                     save_context()
+                    if graph_mode:
+                        publish_messages()
                 result = agent_run.result
         if result is None:
             raise UnexpectedModelBehavior("Agent ended without a final output")
         if graph_mode:
+            if not any(event["type"] == "report.submitted" for event in state.events):
+                raise UnexpectedModelBehavior("Agent ended without a successful submit_report tool call")
             report = {"schema_version": REPORT_VERSION, **result.output.model_dump()}
             status = "report_ready" if report["conclusion"] == "supported" else "unresolved"
             reason = report["summary_zh"]

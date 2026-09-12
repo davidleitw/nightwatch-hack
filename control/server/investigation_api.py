@@ -33,6 +33,7 @@ from nightwatch_agent.report import InvestigationReportBody
 Json = dict[str, Any]
 SCHEMAS = Path(__file__).resolve().parents[2] / "contracts" / "schemas"
 LOG = logging.getLogger(__name__)
+CHAT_EVENTS = {"agent.output", "agent.thinking_summary", "agent.reasoning_status", "agent.usage"}
 
 
 class InvestigationAPIError(APIError):
@@ -99,7 +100,7 @@ class InvestigationEvent(BaseModel):
     cursor: int
     investigation_id: str
     seq: int
-    type: Literal["investigation.started", "tool.started", "observation.recorded", "tool.failed", "report.submitted", "investigation.finished"]
+    type: Literal["investigation.started", "tool.started", "observation.recorded", "tool.failed", "report.submitted", "investigation.finished", "agent.output", "agent.thinking_summary", "agent.reasoning_status", "agent.usage"]
     at: str
     payload: dict[str, Any]
 
@@ -494,7 +495,8 @@ def install_investigations(app, *, model_factory: Callable[[], Any] | None = Non
         return JSONResponse({"investigation_id": value["id"], "snapshots": saved_snapshots(value)}, headers=headers)
 
     async def events(request: Request):
-        query = _query(request, {"after", "limit"})
+        query = _query(request, {"after", "limit", "include_messages"})
+        include_messages = _integer(query.get("include_messages", "0"), name="include_messages", maximum=1)
         if not request.path_params["id"].strip():
             raise InvestigationAPIError(400, "invalid_request", "id 不可為空")
         after = _integer(query.get("after", "0"), name="after", minimum=0)
@@ -502,6 +504,9 @@ def install_investigations(app, *, model_factory: Callable[[], Any] | None = Non
         value = manager.store.events(request.path_params["id"], after, limit)
         if value is None:
             raise InvestigationAPIError(404, "not_found", "找不到這件調查")
+        if not include_messages:
+            # Keep pagination's source seq watermark even for an all-chat page.
+            value["items"] = [event for event in value["items"] if event["type"] not in CHAT_EVENTS]
         return JSONResponse(value, headers=headers)
 
     async def context(request: Request):
@@ -561,7 +566,7 @@ def install_investigations(app, *, model_factory: Callable[[], Any] | None = Non
                         yield frame("state", current)
                     events = manager.store.events_after_cursor(last_event_cursor, 100)
                     for event in events:
-                        yield frame("investigation", event, event["cursor"])
+                        yield frame("agent" if event["type"] in CHAT_EVENTS else "investigation", event, event["cursor"])
                         last_event_cursor = event["cursor"]
                     if time.monotonic() >= graph_tick:
                         if current["graph"] is not None:

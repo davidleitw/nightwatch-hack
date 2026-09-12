@@ -10,14 +10,36 @@ const statusText = {running: '調查中', completed: '已完成調查', failed: 
 const outcomeText = {report_ready: '報告已保存', unresolved: '證據不足，未解決', budget_exhausted: '調查額度用盡', execution_failed: '執行失敗', interrupted: '執行中斷'};
 const health = {ok: '正常', warning: '警告', failing: '異常', unknown: '無資料'};
 const badge = summary => `<span class="badge ${summary.status === 'running' ? 'active' : ['failed', 'interrupted'].includes(summary.status) ? 'failed' : ''}">${esc(statusText[summary.status] || summary.status)}</span>`;
+const icons = {
+  agent: '<rect x="5" y="7" width="14" height="13" rx="4"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6M2 11v5M22 11v5"/>',
+  chat: '<path d="M21 11a8 8 0 0 1-8 8H7l-4 3V11a9 9 0 0 1 18 0Z"/><path d="M8 10h8M8 14h5"/>',
+  tool: '<path d="m14 6 4 4M6 14l4 4M14 3a6 6 0 0 0-7 7L3 14a3 3 0 0 0 7 7l4-4a6 6 0 0 0 7-7l-4 4-7-7Z"/>',
+  report: '<path d="M14 2H5v20h14V7Z M14 2v5h5M8 12h8M8 16h8"/>',
+  history: '<path d="M3 11a9 9 0 1 1 2 7M3 4v7h7M12 7v5l3 2"/>',
+  token: '<path d="m12 2 9 5v10l-9 5-9-5V7ZM3 7l9 5 9-5M12 12v10"/>',
+  cache: '<path d="M20 7a9 9 0 0 0-15-2L2 8m0-6v6h6M4 17a9 9 0 0 0 15 2l3-3m0 6v-6h-6"/>',
+  pulse: '<path d="M2 12h4l3-8 6 16 3-8h4"/>',
+  check: '<path d="m5 12 4 4L19 6"/>',
+  alert: '<path d="m12 3 10 18H2ZM12 9v5M12 17h.01"/>',
+  arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>',
+  down: '<path d="M12 4v16m-6-6 6 6 6-6"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 22v-3a8 8 0 0 1 16 0v3"/>',
+  thinking: '<path d="M9 18h6M10 22h4M8 14a7 7 0 1 1 8 0l-1 4H9Z"/>',
+};
+const icon = name => `<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.chat}</svg>`;
+const reportHref = id => `#investigations/${encodeURIComponent(id)}`;
+const chatHref = id => `${reportHref(id)}/chat`;
+const shortTime = value => Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleTimeString('zh-TW', {hour12: false}) : '—';
 const store = new InvestigationStore();
 const errors = new Map(), details = new Map(), contexts = new Map(), eventLoads = new Map(), logs = new Map();
 let graph = null, graphReceivedAt = null, selectedNode = null, zoom = 1, fit = true, layoutSignature = '';
 let stream = null, logStream = null, streamRetry = null, logRetry = null, heartbeatTimer = null, streamDelay = 1000, logDelay = 1000;
 let lastActivity = 0, lastLogActivity = 0, disposed = false, graphGeneration = 0;
 let history = [], nextBefore = null, historyBusy = false, historyAgain = false, selectedHistory = null, detailGeneration = 0, filter = 'all';
+let selectedDetailTab = 'report', lastChatId = null, messageReplay = true;
 let journalFilter = 'all', posting = false, pendingRequest = null, refreshBusy = false;
 const storageKey = 'nightwatch.investigation.pending.v1';
+
 const localTime = value => Number.isFinite(typeof value === 'number' ? value : Date.parse(value)) ? new Intl.DateTimeFormat('zh-TW', {timeZone: 'Asia/Taipei', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'}).format(new Date(value)) : '—';
 const nodeSlots = new Map();
 let liveGraph = null, liveReceivedAt = null, viewingHistory = false;
@@ -219,6 +241,11 @@ function acceptState(value, options = {}) {
     if (previous !== activeId() || !store.events.has(activeId())) void loadEvents(activeId());
     if (previous !== activeId() || !details.has(activeId())) void loadDetail(activeId(), false);
   }
+  const shown = currentChatId();
+  if (shown && shown !== activeId()) {
+    if (!store.events.has(shown)) void loadEvents(shown);
+    if (!details.has(shown)) void loadDetail(shown, false);
+  }
   if (previous !== activeId()) void loadHistory();
   renderUsagePage();
 }
@@ -298,29 +325,95 @@ function renderNode() {
   updateGraphMarkup('node-detail', `<div class="node-detail-top"><h3>${esc(n.id)}</h3><span class="${esc(n.status)}">${esc(health[n.status])}</span></div><div class="node-metrics">${metrics.map(([label, value]) => `<div><span class="metric-label">${label}</span><strong>${esc(value)}</strong></div>`).join('')}</div><p class="report-note">alive 與來源量測的定義由後端決定；調查結束不會改變服務健康。</p><details><summary>原始節點與相鄰連線</summary>${raw({node: n, edges: graph.edges.filter(e => e.from === n.id || e.to === n.id)})}</details>`);
 }
 
-function activityHTML(id, terminal = false, sourceFilter = 'all') {
-  return pairedActivity(store.activity(id), terminal).filter(row => sourceFilter === 'all' || (row.kind === 'tool' ? sourceFilter === 'agent' : sourceFilter === 'system')).map(row => {
+function reportCard(id, submitted = null) {
+  const detail = details.get(id), saved = detail?.report;
+  const structured = saved?.investigation_report ?? saved?.agent_report ?? submitted;
+  if (!saved && !structured) return '';
+  const title = structured ? '調查報告已產生' : '調查結案紀錄';
+  return `<a class="chat-report-card" href="${reportHref(id)}">${icon('report')}<span><small>${structured ? 'INVESTIGATION REPORT' : 'INVESTIGATION RECORD'}</small><strong>${title}</strong><span>${esc(structured?.summary_zh || saved?.summary_zh || '查看調查結果與引用證據')}</span><b>開啟${structured ? '完整報告' : '結案紀錄'} ${icon('arrow')}</b></span>${icon('arrow')}</a>`;
+}
+function activityItems(id, terminal = false, sourceFilter = 'all') {
+  const events = store.activity(id);
+  const rows = pairedActivity(events, terminal).filter(row => row.event?.type !== 'agent.usage').filter(row => sourceFilter === 'all' || (row.kind === 'tool' || row.event?.type.startsWith('agent.') ? sourceFilter === 'agent' : sourceFilter === 'system'));
+  const items = rows.map(row => {
     if (row.kind === 'event') {
-      const e = row.event;
-      return `<article class="journal-entry system"><div class="journal-meta"><strong>系統</strong><span>${esc(e.type)}</span><time>${esc(at(e.at))}</time></div>${raw(e.payload)}</article>`;
+      const e = row.event, started = e.type === 'investigation.started';
+      if (e.type === 'agent.reasoning_status') {
+        return {key: `message:${id}:${e.seq}`, at: e.at, html: `<article class="chat-message agent-message"><div class="chat-avatar">${icon('thinking')}</div><div class="chat-message-body"><div class="chat-meta"><strong>模型推理</strong><time title="${esc(at(e.at))}">${esc(shortTime(e.at))}</time></div><p class="chat-tool-description">模型已進行推理，此次 API 未提供可讀摘要。</p></div></article>`};
+      }
+      if (e.type === 'agent.output' || e.type === 'agent.thinking_summary') {
+        const thinking = e.type === 'agent.thinking_summary';
+        return {key: `message:${id}:${e.seq}`, at: e.at, html: `<article class="chat-message agent-message"><div class="chat-avatar">${icon(thinking ? 'thinking' : 'agent')}</div><div class="chat-message-body"><div class="chat-meta"><strong>${thinking ? '推理摘要' : 'NightWatch Agent'}</strong><time title="${esc(at(e.at))}">${esc(shortTime(e.at))}</time></div>${thinking ? `<details class="chat-thinking" data-preserve="thinking:${esc(id)}:${e.seq}"><summary>${icon('thinking')}查看公開推理摘要</summary><div class="chat-bubble">${esc(e.payload.text)}</div></details>` : `<div class="chat-bubble">${esc(e.payload.text)}</div>`}</div></article>`};
+      }
+      const label = started ? '調查請求' : '調查結束';
+      const text = started ? e.payload.trigger?.reason || details.get(id)?.trigger?.reason || '開始調查目前服務狀態' : e.payload.reason || outcomeText[e.payload.outcome] || statusText[e.payload.status] || e.type;
+      return {key: `event:${id}:${e.seq}`, at: e.at, html: `<article class="chat-message ${started ? 'user-message' : 'system-message'}"><div class="chat-avatar">${icon(started ? 'user' : 'check')}</div><div class="chat-message-body"><div class="chat-meta"><strong>${label}</strong><time title="${esc(at(e.at))}">${esc(shortTime(e.at))}</time></div><div class="chat-bubble ${e.payload.status === 'failed' || e.payload.status === 'interrupted' ? 'chat-failed' : ''}">${esc(text)}</div><details data-preserve="event:${esc(id)}:${e.seq}"><summary>事件明細</summary>${raw(e.payload)}</details></div></article>`};
     }
-    const end = row.finished, start = row.started;
-    const label = {running: '執行中', recorded: '已取得證據', reported: '已提交報告', failed: '工具失敗', incomplete: '調查已結束，未收到工具結果'}[row.status];
-    return `<article class="journal-entry agent"><div class="journal-meta"><strong>Agent 工具</strong><span>${esc(start?.payload.tool ?? end?.payload.tool ?? '未提供工具名稱')}</span></div><p class="${row.status === 'failed' || row.status === 'incomplete' ? 'failing' : ''}">${label}</p><p class="report-note">${esc(row.investigation_id)} / ${esc(row.call_id)}${start ? '' : ' · 未收到開始事件'}</p>${start ? `<details><summary>開始時間、參數與內容</summary><p>${esc(at(start.at))}</p>${raw(start.payload)}</details>` : ''}${end ? `<details open><summary>${row.status === 'failed' ? '失敗原因' : row.status === 'reported' ? '提交的報告' : '證據 payload.evidence'}</summary>${row.status === 'recorded' && end.payload.evidence === undefined ? '<p class="failing">成功事件未提供 evidence。</p>' : raw(row.status === 'recorded' ? end.payload.evidence : row.status === 'reported' ? end.payload.report : end.payload)}</details>` : ''}</article>`;
-  }).join('') || '<div class="empty">尚未收到此調查的事件。</div>';
+    const end = row.finished, start = row.started, failed = ['failed', 'incomplete'].includes(row.status);
+    const name = start?.payload.tool ?? end?.payload.tool ?? end?.payload.evidence?.tool ?? '工具';
+    const label = {running: '執行中', recorded: '已取得證據', reported: '報告已提交', failed: '執行失敗', incomplete: '未收到結果'}[row.status];
+    const evidence = end?.payload.evidence;
+    const description = row.status === 'recorded' ? evidence?.summary_zh || (evidence === undefined ? '成功事件未提供 evidence。' : '已保存工具回傳的證據。') : failed ? end?.payload.error?.message_zh || end?.payload.error || end?.payload.reason || label : row.status === 'reported' ? 'submit_report 已回傳報告，點擊下方卡片閱讀。' : '等待工具回傳結果…';
+    const contents = start ? `<h4>呼叫參數</h4>${raw(start.payload.args ?? start.payload)}` : '<p class="failing">未收到工具開始事件。</p>';
+    const result = end ? `<h4>${failed ? '失敗內容' : row.status === 'reported' ? '提交結果' : '工具結果'}</h4>${raw(row.status === 'recorded' ? evidence : row.status === 'reported' ? end.payload.report : end.payload)}` : '';
+    return {key: `tool:${id}:${row.call_id}`, at: start?.at ?? end?.at, html: `<article class="chat-message tool-message"><div class="chat-avatar">${icon('agent')}</div><div class="chat-message-body"><div class="chat-meta"><strong>NightWatch Agent</strong><time title="${esc(at(start?.at ?? end?.at))}">${esc(shortTime(start?.at ?? end?.at))}</time></div><details class="chat-tool ${failed ? 'chat-failed' : ''}" data-preserve="tool:${esc(id)}:${esc(row.call_id)}"><summary>${icon(row.status === 'running' ? 'pulse' : failed ? 'alert' : 'tool')}<span class="chat-tool-name">${esc(name)}</span><span class="chat-tool-status ${row.status === 'running' ? 'is-running' : ''}">${label}</span></summary><div class="chat-tool-content"><p class="report-note">${esc(row.call_id)}</p>${contents}${result}</div></details><p class="chat-tool-description ${failed ? 'failing' : ''}">${esc(typeof description === 'string' ? description : JSON.stringify(description))}</p>${row.status === 'reported' ? reportCard(id, end.payload.report) : ''}</div></article>`};
+  });
+  if (['all', 'agent'].includes(sourceFilter) && !events.some(e => e.type === 'report.submitted') && details.get(id)?.report) items.push({key: `report:${id}`, at: details.get(id).closed_at, html: reportCard(id)});
+  return items;
 }
-function renderUsage(usage) {
-  const u = readUsage(usage);
-  $('agent-usage').innerHTML = `<div class="usage-heading"><h3>Agent 用量</h3><span>${usage == null ? '尚未回報' : '後端累計'}</span></div><div class="usage-primary"><div><span class="metric-label">總 token</span><strong>${number(u.total)}</strong></div><div><span class="metric-label">快取命中率</span><strong>${number(u.rate, '%', 100)}</strong></div></div>${u.problems.length ? `<p class="failing">${esc(u.problems.join(' '))}</p>` : ''}<details><summary>後端用量原始值</summary>${raw(usage)}</details>`;
+function activityHTML(id, terminal = false, sourceFilter = 'all') {
+  return activityItems(id, terminal, sourceFilter).map(item => item.html).join('') || '<div class="chat-empty">' + icon('chat') + '<strong>等候調查紀錄</strong><p>取得的訊息與工具結果會顯示在這裡。</p></div>';
 }
+// Reuse unchanged entries so SSE updates do not close evidence or steal focus.
+function updateChat(container, items, follow = false) {
+  const scroller = follow ? $('journal-panel') : null;
+  const nearBottom = scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 70;
+  const existing = new Map([...container.children].map(node => [node.dataset.chatKey, node]));
+  let changed = false;
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index];
+    let node = existing.get(item.key);
+    if (!node) { node = document.createElement('div'); node.dataset.chatKey = item.key; changed = true; }
+    if (node._chatHTML !== item.html) {
+      const open = new Set([...node.querySelectorAll('details[open][data-preserve]')].map(el => el.dataset.preserve));
+      const active = node.contains(document.activeElement) ? document.activeElement : null;
+      const focused = active ? {id: active.id, href: active.getAttribute('href'), hrefIndex: [...node.querySelectorAll('a[href]')].filter(el => el.getAttribute('href') === active.getAttribute('href')).indexOf(active), details: active.closest('details')?.dataset.preserve} : null;
+      node.innerHTML = item.html; node._chatHTML = item.html; changed = true;
+      node.querySelectorAll('details[data-preserve]').forEach(el => { if (open.has(el.dataset.preserve)) el.open = true; if (focused?.details === el.dataset.preserve) el.querySelector('summary')?.focus({preventScroll: true}); });
+      if (focused?.id) [...node.querySelectorAll('[id]')].find(el => el.id === focused.id)?.focus({preventScroll: true});
+      else if (focused?.href) [...node.querySelectorAll('a[href]')].filter(el => el.getAttribute('href') === focused.href)[focused.hrefIndex]?.focus({preventScroll: true});
+    }
+    if (container.children[index] !== node) container.insertBefore(node, container.children[index] || null);
+    existing.delete(item.key);
+  }
+  existing.forEach(node => { node.remove(); changed = true; });
+  if (scroller && changed) {
+    if (nearBottom) scroller.scrollTop = scroller.scrollHeight;
+    $('chat-latest').hidden = nearBottom || scroller.scrollHeight <= scroller.clientHeight;
+  }
+}
+function normalizedUsage(usage) {
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return usage;
+  return {...usage, cached_tokens: usage.cache_read_tokens !== undefined ? usage.cache_read_tokens : usage.cached_tokens, calls: usage.requests !== undefined ? usage.requests : usage.calls};
+}
+function usageStrip(usage) {
+  const u = readUsage(normalizedUsage(usage));
+  const tools = Number.isSafeInteger(usage?.tool_calls) && usage.tool_calls >= 0 ? usage.tool_calls : null;
+  if (usage?.tool_calls !== undefined && tools === null) u.problems.push('tool_calls 必須是非負安全整數。');
+  return `<div class="usage-strip"><span title="輸入與輸出 token 加總">${icon('token')}<span>Token <strong>${number(u.total)}</strong></span></span><span title="快取讀取占輸入 token 比例">${icon('cache')}<span>Cache <strong>${number(u.rate, '%', 100)}</strong></span></span><span title="模型請求次數">${icon('pulse')}<span>請求 <strong>${number(u.calls)}</strong></span></span><span title="後端工具用量，不含 submit_report 報告提交">${icon('tool')}<span>工具 <strong>${number(tools)}</strong></span></span></div>${u.problems.length ? `<p class="failing usage-strip-error">${esc(u.problems.join(' '))}</p>` : ''}`;
+}
+function usageFor(id) {
+  const detail = details.get(id);
+  const latest = store.activity(id).findLast(e => e.type === 'agent.usage');
+  return latest && latest.seq > (detail?.event_seq ?? -1) ? latest.payload.usage : detail?.usage ?? latest?.payload.usage;
+}
+function renderUsage(usage) { $('agent-usage').innerHTML = usageStrip(usage); }
 function usageId() { return activeId() || store.state?.last_completed_investigation_id; }
 function renderUsagePage() {
   const view = $('usage-view');
   if (view.hidden) return;
-  const id = usageId(), detail = details.get(id), usage = detail?.usage;
-  const cached = usage?.cache_read_tokens !== undefined ? usage.cache_read_tokens : usage?.cached_tokens;
-  const calls = usage?.requests !== undefined ? usage.requests : usage?.calls;
-  const u = readUsage(usage && typeof usage === 'object' && !Array.isArray(usage) ? {...usage, cached_tokens: cached, calls} : usage);
+  const id = usageId(), detail = details.get(id), usage = usageFor(id);
+  const u = readUsage(normalizedUsage(usage));
   const problems = u.problems.map(message => message.replaceAll('cached_tokens', usage?.cache_read_tokens !== undefined ? 'cache_read_tokens' : 'cached_tokens').replaceAll('calls', usage?.requests !== undefined ? 'requests' : 'calls'));
   const extra = key => {
     const value = usage?.[key];
@@ -338,7 +431,7 @@ function renderUsagePage() {
       <article><h2>總 token</h2><strong>${number(u.total)}</strong><p>輸入 + 輸出</p></article>
       <article><h2>Prompt cache 命中率</h2><strong>${number(u.rate, '%', 100)}</strong><p>${u.input_tokens === 0 ? '尚無輸入，命中率不適用' : '快取讀取 / 全部輸入'}</p><div class="usage-view-meter" ${u.rate === null ? 'aria-hidden="true"' : `role="meter" aria-label="Prompt cache 命中率" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${u.rate * 100}"`}><span style="width:${u.rate === null ? 0 : u.rate * 100}%"></span></div></article>
       <article><h2>模型請求</h2><strong>${number(u.calls)} <small>次</small></strong><p>本次調查的模型請求數</p></article>
-      <article><h2>工具呼叫</h2><strong>${number(tools)} <small>次</small></strong><p>本次調查的工具呼叫數</p></article>
+      <article><h2>工具呼叫</h2><strong>${number(tools)} <small>次</small></strong><p>後端工具用量，不含報告提交</p></article>
     </div>
     ${problems.length ? `<p class="usage-view-error" role="alert">${esc(problems.join(' '))}</p>` : !reported ? '<p class="usage-view-note">尚未取得用量數字；「—」不代表 0。若讀取失敗，請查看上方錯誤並按「更新資料」。</p>' : ''}
     <div class="usage-view-section-title"><h2>用量趨勢</h2><span>本次調查</span></div><div class="usage-view-charts">${trend('Token 使用量', 'tokens')}${trend('Prompt cache 命中率', '%')}</div>
@@ -355,29 +448,55 @@ async function loadUsagePage() {
   try { await loadDetail(id, false); }
   finally { if (usageLoadingId === id) usageLoadingId = null; }
 }
-function reportHTML(detail) {
-  if (!detail) return '<p class="report-note">正在讀取調查詳情。</p>';
-  const report = detail.report;
-  const agentReport = report?.investigation_report ?? report?.agent_report;
-  if (!report) return `<p class="${detail.status === 'running' ? 'report-note' : 'failing'}">${detail.status === 'running' ? '調查尚未結束，報告尚未產生。' : '調查已結束，但後端未提供報告。'}</p>`;
-  return `<p class="detail-summary">${esc(report.summary_zh || '報告未提供摘要。')}</p><p>${esc(outcomeText[report.outcome] || report.outcome || '未提供結果')}</p><p class="report-note">${esc(at(report.started_at))} → ${esc(at(report.closed_at))}。調查完成不表示服務已恢復。</p><h3>限制</h3>${Array.isArray(report.limitations) && report.limitations.length ? `<ul>${report.limitations.map(item => `<li>${esc(item)}</li>`).join('')}</ul>` : '<p class="report-note">後端未列出限制。</p>'}<h3>Agent 報告</h3>${agentReport == null ? '<p class="report-note">未產生可採信的根因報告；此調查仍有保存結案摘要。</p>' : raw(agentReport)}<details><summary>證據與引用 ID</summary>${raw({evidence_ids: report.evidence_ids, evidence: detail.evidence})}</details>`;
+function reportHTML(detail, id = detail?.id) {
+  const submitted = store.activity(id).findLast(e => e.type === 'report.submitted')?.payload.report;
+  if (!detail && !submitted) return '<div class="chat-empty">' + icon('report') + '<strong>正在讀取調查報告</strong></div>';
+  const report = detail?.report, agent = report?.investigation_report ?? report?.agent_report ?? submitted;
+  if (!report && !agent) return `<div class="chat-empty">${icon(detail.status === 'running' ? 'pulse' : 'alert')}<strong>${detail.status === 'running' ? '調查進行中，報告尚未產生' : '尚無提交的調查報告'}</strong><p>${esc(detail.summary_zh || '可返回對話查看工具執行狀態。')}</p></div>`;
+  const list = (title, values) => Array.isArray(values) && values.length ? `<section class="report-section"><h3>${title}</h3><ul>${values.map(value => `<li>${esc(value)}</li>`).join('')}</ul></section>` : '';
+  const chips = values => Array.isArray(values) ? values.map(value => `<span class="report-chip">${esc(value)}</span>`).join('') : '';
+  const findings = Array.isArray(agent?.findings) ? agent.findings : [];
+  const hypotheses = Array.isArray(agent?.hypotheses) ? agent.hypotheses : [];
+  const conclusion = {supported: '調查結論有證據支持', inconclusive: '證據不足，尚無定論', no_incident_observed: '未觀測到事故', root_cause_identified: '已識別根因'}[agent?.conclusion] || agent?.conclusion || outcomeText[report?.outcome] || '調查結果';
+  return `<div class="report-lead"><span class="report-eyebrow">${icon('report')} INVESTIGATION REPORT</span><h2>${esc(conclusion)}</h2><p class="report-summary">${esc(agent?.summary_zh || report?.summary_zh || agent?.root_cause?.summary_zh || '未提供摘要')}</p><div class="report-meta"><span>${icon('history')}${esc(at(report?.started_at || detail?.started_at))}</span><span>${icon('check')}${report ? '已保存結案紀錄' : '工具已提交，等待結案'}</span></div></div>
+  ${findings.length ? `<section class="report-section"><h3>${icon('pulse')} 調查發現 <span>${findings.length}</span></h3>${findings.map((finding, i) => `<article class="report-finding"><span class="finding-number">${String(i + 1).padStart(2, '0')}</span><div><p>${esc(finding.summary_zh)}</p><div class="report-chips">${chips(finding.node_ids)}${chips(finding.evidence_ids)}</div></div></article>`).join('')}</section>` : ''}
+  ${agent?.root_cause ? `<section class="report-section"><h3>根因</h3><p>${esc(agent.root_cause.summary_zh)}</p><div class="report-chips">${chips([agent.root_cause.node, agent.root_cause.mechanism])}</div><p>信心 ${number(agent.confidence, '%', 100)}</p></section>` : ''}
+  ${hypotheses.length ? `<section class="report-section"><h3>${icon('thinking')} 假說與不確定性</h3>${hypotheses.map(h => `<article class="report-hypothesis"><h4>${esc(h.cause_zh)}</h4><p>${esc(h.uncertainty_zh)}</p><div class="report-chips">${chips(h.node_ids)}</div><p class="report-note">支持證據 ${esc(h.supporting_evidence_ids?.join('、') || '未列出')} · 反向證據 ${esc(h.counterevidence_ids?.join('、') || '未列出')}</p></article>`).join('')}</section>` : ''}
+  ${list('限制與觀測缺口', [...new Set([...(Array.isArray(report?.limitations) ? report.limitations : []), ...(Array.isArray(agent?.limitations) ? agent.limitations : [])])])}
+  ${list('建議下一步', agent?.next_steps)}
+  <section class="report-section"><h3>${icon('tool')} 引用證據</h3><div class="report-chips">${chips(report?.evidence_ids ?? agent?.cited_evidence_ids)}</div>${Array.isArray(detail?.evidence) ? detail.evidence.map(e => `<details class="report-evidence" data-preserve="evidence:${esc(e.id)}"><summary><span>${esc(e.id)}</span> ${esc(e.summary_zh || e.tool)}</summary>${raw(e)}</details>`).join('') : '<p class="report-note">尚未取得保存的證據。</p>'}</section>
+  <details class="report-raw" data-preserve="report-raw"><summary>完整報告原始資料</summary>${raw(report ?? agent)}</details><p class="report-note">調查完成不表示服務已恢復；服務健康仍以觀測資料為準。</p>`;
 }
+function currentChatId() { return activeId() || store.state?.last_completed_investigation_id || null; }
 function renderCurrent() {
-  const id = activeId(), summary = activeSummary(), detail = id ? details.get(id) : null;
-  $('active-phase').textContent = id ? '調查中' : store.state ? '無進行中調查' : '等待狀態';
+  const id = currentChatId(), detail = id ? details.get(id) : null, summary = activeSummary() || detail;
+  const terminal = summary ? summary.status !== 'running' : false;
+  $('active-phase').textContent = activeId() ? '調查中' : store.state ? '無進行中調查' : '等待狀態';
   $('investigation-phase').innerHTML = summary ? badge(summary) : '';
-  $('investigation-summary').innerHTML = summary ? `<h3>${esc(summary.summary_zh || '正在調查目前服務狀態')}</h3><p class="report-note">${esc(id)}</p><p>目前可用工具：get_graph</p>` : '<h3>目前沒有進行中的調查</h3><p class="report-note">可開始新調查，或到歷史查看已保存的報告。服務拓樸持續更新。</p>';
-  if (!store.state) $('investigation-summary').innerHTML = '<h3>尚未取得調查狀態</h3><p class="report-note">連線恢復後才能確認目前是否有調查。</p>';
-  renderUsage(detail?.usage);
-  const agent = id && journalFilter !== 'monitor' ? activityHTML(id, false, journalFilter) : '';
-  const monitor = journalFilter === 'all' || journalFilter === 'monitor' ? [...logs.values()].map(log => `<article class="journal-entry monitor"><div class="journal-meta"><strong>Monitor</strong><span>${esc(log.monitor_id)} · ${esc(log.level)}</span><time>${esc(at(log.occurred_at))}</time></div><p>${esc(log.message)}</p><div class="journal-links">${log.refs.node_ids.map(node => `<button class="node-link" data-locate-node="${esc(node)}">${esc(node)} ↗</button>`).join('')}</div><details><summary>原始 log</summary>${raw(log)}</details></article>`).join('') : '';
-  $('journal-entries').innerHTML = agent + monitor || '<div class="empty">目前沒有符合來源的紀錄。</div>';
-  $('journal-count').textContent = `${id ? store.activity(id).length : 0} 個調查事件 / ${logs.size} 筆 Monitor log`;
-  $('journal-note').textContent = '調查事件依序配對工具；Monitor 為獨立即時來源，不保證刷新或斷線補送。';
-  $('journal-entries').querySelectorAll('[data-locate-node]').forEach(button => button.onclick = () => locateNode(button.dataset.locateNode));
-  $('investigation-report').innerHTML = id ? reportHTML(detail) : '<p class="report-note">已結束的調查請至歷史查看保存的報告。</p>';
+  $('investigation-summary').innerHTML = id ? `<span class="chat-session-label">${activeId() ? '<i class="live-dot"></i>目前調查' : icon('history') + '最近一次調查'}</span><span class="chat-session-id" title="${esc(id)}">${esc(id)}</span>` : `<span class="chat-session-label">${store.state ? '開始調查，讓 Agent 蒐集證據並產生報告。' : '等待調查狀態…'}</span>`;
+  renderUsage(usageFor(id) ?? activeSummary()?.usage);
+  const items = id && journalFilter !== 'monitor' ? activityItems(id, terminal, journalFilter) : [];
+  if (journalFilter === 'all' || journalFilter === 'monitor') {
+    for (const log of logs.values()) items.push({key: `monitor:${log.monitor_id}:${log.event_id}`, at: log.occurred_at, html: `<article class="chat-message monitor-message"><div class="chat-avatar">${icon('pulse')}</div><div class="chat-message-body"><div class="chat-meta"><strong>Monitor</strong><span>${esc(log.level)}</span><time>${esc(shortTime(log.occurred_at))}</time></div><div class="chat-bubble">${esc(log.message)}</div><div class="journal-links">${log.refs.node_ids.map(node => `<button class="node-link" data-locate-node="${esc(node)}">${esc(node)} ↗</button>`).join('')}</div><details data-preserve="log:${esc(log.monitor_id)}:${esc(log.event_id)}"><summary>原始 log · ${esc(log.monitor_id)}</summary>${raw(log)}</details></div></article>`});
+    // Merge monitor observations by timestamp without changing investigation seq order.
+    const monitorItems = items.filter(item => item.key.startsWith('monitor:')).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+    const agentItems = items.filter(item => !item.key.startsWith('monitor:'));
+    items.length = 0;
+    for (const item of agentItems) { while (monitorItems.length && Date.parse(monitorItems[0].at) <= Date.parse(item.at)) items.push(monitorItems.shift()); items.push(item); }
+    items.push(...monitorItems);
+  }
+  if (!items.length) items.push({key: 'empty', html: `<div class="chat-empty">${icon('agent')}<strong>${id ? '等候調查紀錄' : '準備好開始調查'}</strong><p>${id ? '目前沒有符合來源的訊息。' : 'Agent 的回覆、工具取證與報告會出現在這裡。'}</p><a href="#investigations">${icon('history')} 瀏覽調查歷史</a></div>`});
+  const changedId = lastChatId !== id;
+  if (changedId) { $('journal-entries').replaceChildren(); lastChatId = id; }
+  updateChat($('journal-entries'), items, true);
+  if (changedId) { $('journal-panel').scrollTop = $('journal-panel').scrollHeight; $('chat-latest').hidden = true; }
+  $('journal-count').textContent = `${id ? store.activity(id).length : 0} 個事件 · ${logs.size} 筆 log`;
+  $('journal-note').textContent = messageReplay ? '文字與推理摘要依模型實際回覆呈現；工具結果可展開。Monitor 斷線不補送。' : '此來源僅提供工具紀錄，未提供 Agent 文字回放。Monitor 斷線不補送。';
+  $('show-report').disabled = !id;
+  $('show-report').onclick = () => { if (id) location.hash = reportHref(id); };
+  $('investigation-report').hidden = true;
   const latest = store.state?.last_completed_investigation_id;
-  $('current-incident').innerHTML = `<div><h3>${id ? '調查由後端執行，關閉頁面不會取消' : '目前沒有進行中的調查'}</h3><p>調查與服務健康分開顯示。</p></div><a href="#investigations${latest ? '/' + encodeURIComponent(latest) : ''}">${latest ? '查看最近一次報告' : '查看調查歷史'} →</a>`;
+  $('current-incident').innerHTML = `<div><h3>${activeId() ? '調查由後端執行，關閉頁面不會取消' : '目前沒有進行中的調查'}</h3><p>調查結論與服務健康分開顯示。</p></div><a href="${latest ? reportHref(latest) : '#investigations'}">${icon(latest ? 'report' : 'history')}${latest ? '查看最近一次報告' : '查看調查歷史'} ${icon('arrow')}</a>`;
   if (!store.state) $('current-incident').innerHTML = '<div><h3>尚未取得調查狀態</h3><p>請查看上方連線錯誤，恢復後按「更新資料」。</p></div>';
 }
 
@@ -387,7 +506,14 @@ async function loadEvents(id) {
     let after = 0;
     try {
       do {
-        const page = await requestJSON(`/api/investigations/${encodeURIComponent(id)}/events?after=${after}&limit=100`);
+        const path = `/api/investigations/${encodeURIComponent(id)}/events?after=${after}&limit=100`;
+        let page;
+        try { page = await requestJSON(path + (messageReplay ? '&include_messages=1' : '')); }
+        catch (e) {
+          if (!messageReplay || e.status !== 400) throw e;
+          page = await requestJSON(path); // Older control rejects only the new query.
+          messageReplay = false;
+        }
         if (!Array.isArray(page.items)) throw new Error('調查事件清單缺少 items。');
         for (const event of page.items) {
           if (event.investigation_id !== id) throw new Error('事件屬於另一個調查。');
@@ -436,20 +562,22 @@ function renderHistory() {
   const query = $('incident-search').value.toLowerCase().trim();
   const rows = history.filter(item => (filter === 'all' || (filter === 'active' ? item.status === 'running' : item.status !== 'running')) && [item.id, item.summary_zh, item.status, item.outcome, statusText[item.status], outcomeText[item.outcome]].some(value => String(value ?? '').toLowerCase().includes(query)));
   $('nav-count').textContent = history.length;
-  $('incident-rows').innerHTML = rows.map(item => `<tr><td>${esc(item.id)}</td><td>${badge(item)}</td><td>${esc(item.trigger?.reason || '—')}</td><td>${esc(at(item.started_at))}</td><td>${esc(outcomeText[item.outcome] || item.outcome || '—')}</td><td><a href="#investigations/${encodeURIComponent(item.id)}">查看報告 ↗</a></td></tr>`).join('');
-  $('list-empty').hidden = rows.length > 0;
+  $('incident-rows').innerHTML = rows.map(item => `<tr><td>${esc(item.id)}</td><td>${badge(item)}</td><td>${esc(item.trigger?.reason || '—')}</td><td>${esc(at(item.started_at))}</td><td>${esc(outcomeText[item.outcome] || item.outcome || '—')}</td><td><div class="history-links"><a href="${chatHref(item.id)}">${icon('chat')}對話</a><a href="${reportHref(item.id)}">${icon('report')}報告</a></div></td></tr>`).join('');
+  $('list-empty').hidden = Boolean(selectedHistory) || rows.length > 0;
   $('list-empty').textContent = errors.has('history') ? '無法取得調查歷史，請查看上方錯誤。' : '目前沒有符合條件的調查。';
   $('list-count').textContent = `顯示 ${rows.length} / 已載入 ${history.length} 件調查；包含失敗、中斷與未解決。`;
-  $('more-investigations').hidden = nextBefore === null;
+  $('more-investigations').hidden = Boolean(selectedHistory) || nextBefore === null;
 }
 function renderDetail() {
   $('incident-detail').hidden = !selectedHistory;
   if (!selectedHistory) return;
   const detail = details.get(selectedHistory);
-  if (!detail) { $('incident-detail').innerHTML = '<div class="empty">調查詳情尚未取得；若失敗請按「更新資料」。</div>'; return; }
-  $('incident-detail').innerHTML = `<div class="panel-header"><div><h2>調查報告</h2><span>${esc(detail.id)}</span></div>${badge(detail)}</div><div class="detail-body">${reportHTML(detail)}<details><summary>用量</summary>${raw(detail.usage)}</details><h3>工具與調查紀錄</h3>${activityHTML(detail.id, detail.status !== 'running')}<h3>保存的上下文</h3><p class="report-note">${detail.context_available ? detail.context_complete ? '後端標記上下文完整。' : '上下文不完整；不是完整模型對話。' : '後端尚未保存上下文。'}</p><button id="load-context" ${detail.context_available ? '' : 'disabled'}>讀取保存的上下文</button><div id="saved-context"></div></div>`;
-  $('load-context').onclick = () => loadContext(detail.id);
-  if (contexts.has(detail.id)) renderContext(contexts.get(detail.id));
+  const heading = `<div class="detail-navigation"><a href="#investigations">${icon('history')} 調查歷史</a><span>/</span><span>${esc(selectedHistory)}</span><a href="#topology">返回工作台 ${icon('arrow')}</a></div><div class="detail-title"><div><span class="report-eyebrow">NIGHTWATCH / INVESTIGATION</span><h2>${detail?.created_seq ? `調查 #${esc(detail.created_seq)}` : '調查紀錄'}</h2></div>${detail ? badge(detail) : ''}</div><div class="detail-tabs"><a href="${reportHref(selectedHistory)}" aria-current="${selectedDetailTab === 'report' ? 'page' : 'false'}">${icon('report')}報告</a><a href="${chatHref(selectedHistory)}" aria-current="${selectedDetailTab === 'chat' ? 'page' : 'false'}">${icon('chat')}調查對話</a></div>`;
+  const submitted = store.activity(selectedHistory).some(e => e.type === 'report.submitted');
+  const content = !detail && !(submitted && selectedDetailTab === 'report') ? '<div class="chat-empty">' + icon('report') + '<strong>正在讀取調查</strong><p>若讀取失敗，請按上方「更新資料」。</p></div>' : selectedDetailTab === 'report' ? reportHTML(detail, selectedHistory) : `<div class="history-usage">${usageStrip(usageFor(detail.id))}</div><div class="history-chat">${activityHTML(detail.id, detail.status !== 'running')}</div><section class="report-section"><h3>保存的上下文</h3><p class="report-note">${detail.context_available ? detail.context_complete ? '後端標記上下文完整。' : '上下文不完整；不是完整模型對話。' : '後端尚未保存上下文。'}</p><button id="load-context" ${detail.context_available ? '' : 'disabled'}>讀取保存的上下文</button><div id="saved-context"></div></section>`;
+  updateChat($('incident-detail'), [{key: `detail:${selectedHistory}:${selectedDetailTab}`, html: `${heading}<div class="report-document">${content}</div>`}]);
+  if ($('load-context')) $('load-context').onclick = () => loadContext(detail.id);
+  if ($('saved-context') && contexts.has(detail.id)) renderContext(contexts.get(detail.id));
 }
 function renderContext(value) {
   $('saved-context').innerHTML = `<p class="${value.complete ? 'report-note' : 'failing'}">${value.complete ? '後端標記完整的保存上下文。' : '部分上下文（complete: false），不能視為完整模型對話。'}</p>${raw(value.context)}`;
@@ -461,7 +589,7 @@ async function loadContext(id) {
     const value = await requestJSON(`/api/investigations/${encodeURIComponent(id)}/context`);
     if (typeof value.complete !== 'boolean' || !value.context || typeof value.context !== 'object') throw new Error('上下文格式不符。');
     if (!contexts.get(id)?.complete || value.complete) contexts.set(id, value);
-    if (selectedHistory !== id || generation !== detailGeneration) return;
+    if (selectedHistory !== id || generation !== detailGeneration || !$('saved-context')) return;
     renderContext(contexts.get(id));
     error(`context:${id}`);
   } catch (e) { error(`context:${id}`, `上下文讀取失敗：${e.message}`); }
@@ -473,7 +601,7 @@ function route() {
   const usage = parts[0] === 'usage';
   $('topology-view').hidden = list || usage; $('incidents-view').hidden = !list;
   $('usage-view').hidden = !usage;
-  document.querySelector('.investigation-actions').hidden = usage;
+  document.querySelector('.investigation-actions').hidden = usage || list;
   $('nav-usage').setAttribute('aria-current', usage ? 'page' : 'false');
   $('nav-topology').setAttribute('aria-current', list || usage ? 'false' : 'page');
   $('nav-incidents').setAttribute('aria-current', list ? 'page' : 'false');
@@ -482,11 +610,16 @@ function route() {
   let id = null;
   try { id = list && parts[1] ? decodeURIComponent(parts[1]) : null; error('route'); }
   catch { error('route', '調查網址編碼不合法。'); }
-  if (id !== selectedHistory) {
+  const tab = parts[2] === 'chat' ? 'chat' : 'report';
+  document.querySelectorAll('#incidents-view > :not(#incident-detail)').forEach(el => { el.hidden = Boolean(id); });
+  if (id !== selectedHistory || tab !== selectedDetailTab) {
+    selectedDetailTab = tab;
     selectedHistory = id; detailGeneration++; renderDetail();
     if (id) { void loadDetail(id); void loadEvents(id); }
   }
-  renderHistory(); if (!list) renderGraph();
+  if (!id) renderHistory();
+  if (list && id) { $('page-title').textContent = tab === 'chat' ? '調查對話' : '調查報告'; $('page-description').textContent = '追溯取證過程，閱讀有依據的調查結果。'; }
+  if (!list && !usage) renderGraph();
   if (usage) void loadUsagePage();
 }
 
@@ -502,6 +635,8 @@ async function refresh() {
   finally { refreshBusy = false; $('refresh').disabled = false; }
   await loadHistory();
   await loadUsagePage();
+  const current = currentChatId();
+  if (current && current !== selectedHistory) void loadDetail(current, false);
   if (selectedHistory) { void loadDetail(selectedHistory); void loadEvents(selectedHistory); }
 }
 async function startInvestigation() {
@@ -550,15 +685,18 @@ function connect() {
     acceptState(value, {initialStream: initial && requestedCursor === null}); initial = false;
   }));
   events.addEventListener('graph', receive(value => acceptGraph(value)));
-  events.addEventListener('investigation', receive(value => {
+  const receiveInvestigation = receive(value => {
     const fresh = store.acceptEvent(value, {stream: true});
     if (!fresh) return;
-    renderCurrent(); if (value.investigation_id === selectedHistory) renderDetail();
+    renderCurrent(); renderUsagePage(); if (value.investigation_id === selectedHistory) renderDetail();
+    if (['observation.recorded', 'tool.failed', 'report.submitted'].includes(value.type)) void loadDetail(value.investigation_id, value.investigation_id === selectedHistory);
     if (value.type === 'investigation.finished') {
       void loadDetail(value.investigation_id, value.investigation_id === selectedHistory); void loadHistory();
     }
     // Neither started nor finished changes active ID. Only state owns it.
-  }));
+  });
+  events.addEventListener('investigation', receiveInvestigation);
+  events.addEventListener('agent', receiveInvestigation);
   events.addEventListener('ping', receive(value => { if (!Number.isFinite(Date.parse(value.server_now))) throw new Error('ping 缺少 server_now。'); }));
   events.onerror = () => { if (stream === events) reconnect(); };
 }
@@ -617,11 +755,19 @@ function dispose() {
 
 export function startWorkspace() {
   document.title = 'NightWatch · 調查工作台';
+  document.body.classList.add('chat-workspace');
   $('nav-usage').hidden = false;
-  $('nav-incidents').href = '#investigations'; $('nav-incidents').innerHTML = '調查歷史 <span id="nav-count">—</span>';
+  $('nav-incidents').href = '#investigations'; $('nav-incidents').innerHTML = icon('history') + '調查歷史 <span id="nav-count">—</span>';
   $('source').value = 'live'; $('source').onchange = event => { const url = new URL(location.href); url.searchParams.set('source', event.target.value); location.href = url.href; };
-  $('investigation-phase').parentElement.querySelector('h2').textContent = '目前調查';
-  $('show-report').textContent = '目前調查報告';
+  $('investigation-phase').parentElement.querySelector('h2').innerHTML = icon('agent') + '調查對話';
+  $('investigation-phase').insertAdjacentHTML('afterend', `<a class="chat-history-link" href="#investigations" title="查看調查歷史" aria-label="查看調查歷史">${icon('history')}</a>`);
+  $('investigation-summary').before($('agent-usage'));
+  $('show-journal').innerHTML = icon('chat') + '對話紀錄';
+  $('show-report').innerHTML = icon('report') + '查看報告';
+  $('journal-panel').insertAdjacentHTML('afterend', `<button id="chat-latest" class="chat-latest" hidden>${icon('down')}跳到最新訊息</button>`);
+  $('chat-latest').onclick = () => { $('journal-panel').scrollTop = $('journal-panel').scrollHeight; $('chat-latest').hidden = true; };
+  $('journal-panel').addEventListener('scroll', () => { if ($('journal-panel').scrollHeight - $('journal-panel').scrollTop - $('journal-panel').clientHeight < 70) $('chat-latest').hidden = true; });
+  $('journal-entries').onclick = event => { const button = event.target.closest('[data-locate-node]'); if (button) locateNode(button.dataset.locateNode); };
   $('active-phase').previousElementSibling.textContent = '目前調查';
   $('graph-viewport').parentElement.querySelector('.assessment-legend').textContent = '健康依後端觀測；同一節點位置固定，位置不表示呼叫順序。';
   $('page-title').closest('.page-heading').insertAdjacentHTML('afterend', '<div class="investigation-actions"><button id="start-investigation" disabled>開始調查</button><span id="submission-status" role="status">僅在按下按鈕後開始；重新整理不會建立調查。</span></div>');
@@ -655,8 +801,7 @@ export function startWorkspace() {
   document.querySelectorAll('[data-event-source]').forEach(button => {
     button.onclick = () => { journalFilter = button.dataset.eventSource; document.querySelectorAll('[data-event-source]').forEach(b => b.setAttribute('aria-pressed', String(b === button))); renderCurrent(); };
   });
-  const switchTab = report => { $('journal-panel').hidden = report; $('investigation-report').hidden = !report; $('show-journal').setAttribute('aria-pressed', String(!report)); $('show-report').setAttribute('aria-pressed', String(report)); };
-  $('show-journal').onclick = () => switchTab(false); $('show-report').onclick = () => switchTab(true);
+  $('show-journal').onclick = () => { $('journal-panel').hidden = false; };
   $('node-search').oninput = renderGraph; $('health-filter').onchange = renderGraph;
   $('zoom-in').onclick = () => { fit = false; zoom = Math.min(1.5, zoom + .1); renderGraph(); };
   $('zoom-out').onclick = () => { fit = false; zoom = Math.max(.5, zoom - .1); renderGraph(); };

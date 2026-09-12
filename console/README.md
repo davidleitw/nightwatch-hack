@@ -64,4 +64,12 @@ control 自己的 `NIGHTWATCH_MOCK_DATA=1` 是另一個獨立開關；它不等�
 
 ## 目前限制
 
-畫面沒有故障注入、批准修復、換輪或對話入口。`report`、`snapshots`、`export` 專用端點已有後端實作，但目前畫面讀調查 detail／events／context，沒有獨立匯出操作。圖上監測範圍與未對接項目見 [盤點](../INTEGRATION.md)。
+畫面沒有故障注入、批准修復、換輪或對話入口。獨立報告頁讀調查 detail／events／context；`snapshots`、`export` 專用端點尚無獨立匯出操作。圖上監測範圍與未對接項目見 [盤點](../INTEGRATION.md)。
+
+## 調查對話與報告
+
+右側使用對話紀錄：Agent 文字、可展開的公開推理摘要（API 未提供文字時顯示摘要不可用）、工具狀態／參數／結果與獨立報告卡。置頂用量列和 Usage 頁共用欄位對應：`cache_read_tokens` 優先於 `cached_tokens`、`requests` 優先於 `calls`，總 token 為輸入加輸出，快取命中率為快取讀取除以輸入。未知顯示 `—`，異常仍提示。
+
+`#investigations` 是歷史清單，`#investigations/<id>` 是獨立報告，`#investigations/<id>/chat` 是保存的對話；可相互切換。結束後右側保留最近一筆調查。報告先讀已收到的提交事件，保存的 detail 到達後補上證據與結案資訊。
+
+文字與摘要依模型每次實際回覆更新；沒有對話輸入或逐 token 推播。新的 `agent` SSE 事件使用同一條調查連線。讀取歷史時使用 `include_messages=1`，舊後端拒絕新參數時退回原事件 API 並標示沒有文字回放。未保存的舊訊息不會憑空補出。
