@@ -25,3 +25,9 @@ Text (verbatim): "NightWatch" as the large title; "From signals to understanding
 Color palette: midnight navy, pale ivory typography, muted mint and teal light, one subtle amber anomaly accent.
 Constraints: Only the exact two text lines specified. No extra labels, no badges, no watermark, no brand logos, no fake UI, no tiny text, no people, no robots, no shields. Not a security product or auto-repair claim. Opaque background. Excellent legibility when scaled to GitHub content width.
 ```
+
+## Workflow animation / 流程動畫
+
+`nightwatch-workflow.gif` is the locally rendered workflow illustration used in the “How it works” section of both READMEs. It loops through detection, investigation, and reporting in 12 seconds (120 frames, 1000 × 534, approximately 235 KB). The diagram illustrates the workflow; it is not a Console recording. The original hero remains at the top, and the static Mermaid flow remains available in an expandable section.
+
+`nightwatch-workflow.gif` 是兩版 README「運作方式」段落使用的本機繪製概念動畫，以 12 秒呈現發現異常、追查證據與產出報告（120 格、1000 × 534、約 235 KB）。進版圖保留在頁首，靜態 Mermaid 流程圖可展開查看。動畫是流程說明，並非 Console 錄影；素材隨 repository 保存，不依賴外部圖片服務。

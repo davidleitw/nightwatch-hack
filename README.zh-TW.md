@@ -24,6 +24,17 @@ NightWatch 是一個**協助調查服務異常的 AI Agent**。它把服務健�
 
 ## 運作方式
 
+用 12 秒看懂一次調查的流程。
+
+<p align="center">
+  <img src="docs/readme/nightwatch-workflow.gif" alt="NightWatch 運作流程：服務事件經 Monitor 與 Guard Room 整理，Agent 查閱服務圖、日誌與快照，產出包含發現、證據與下一步的報告。" width="100%">
+  <br>
+  <sub>流程概念動畫 · 發現異常 → 追查證據 → 產出報告 · <a href="docs/readme/nightwatch-workflow.gif">查看原尺寸</a></sub>
+</p>
+
+<details>
+<summary>展開靜態流程圖</summary>
+
 ```mermaid
 flowchart LR
     S["你的系統"] --> M["Monitor<br/>收集執行事件"]
@@ -31,6 +42,8 @@ flowchart LR
     G --> A["AI Agent<br/>使用工具調查"]
     A --> C["Console<br/>查看結果與證據"]
 ```
+
+</details>
 
 1. **收集觀測。** Monitor 記錄函式執行、耗時、日誌與例外，透過 JSONL 或 HTTP 傳送事件。
 2. **找出異常。** Guard Room 把事件對應到服務節點，計算健康指標並保存服務圖快照。持續出現的新異常可自動觸發調查，也能手動開始。

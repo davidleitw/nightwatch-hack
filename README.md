@@ -24,6 +24,17 @@ Connect it to your existing system through a monitoring adapter and service mapp
 
 ## How it works
 
+See the investigation flow in 12 seconds.
+
+<p align="center">
+  <img src="docs/readme/nightwatch-workflow.gif" alt="NightWatch workflow: service events pass through Monitor and Guard Room; the agent reads the graph, logs, and snapshots to produce findings, evidence, and next steps." width="100%">
+  <br>
+  <sub>Workflow illustration · Detect → Investigate → Explain · <a href="docs/readme/nightwatch-workflow.gif">View full size</a></sub>
+</p>
+
+<details>
+<summary>View the static flow</summary>
+
 ```mermaid
 flowchart LR
     S["Your system"] --> M["Monitor<br/>Collect execution events"]
@@ -31,6 +42,8 @@ flowchart LR
     G --> A["AI Agent<br/>Investigate with tools"]
     A --> C["Console<br/>Follow findings and evidence"]
 ```
+
+</details>
 
 1. **Observe.** Monitor captures function execution, duration, logs, and exceptions, then sends events through JSONL or HTTP.
 2. **Find the signal.** Guard Room maps events to service nodes, calculates health indicators, and saves graph snapshots. Repeated fresh anomalies can trigger an investigation; you can also start one manually.
