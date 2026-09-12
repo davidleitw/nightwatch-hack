@@ -1,5 +1,10 @@
 # Python agent loop
 
+Agent 實際可見的英文 System Prompt、Tool Description、開場與工具結果，見
+[AGENT-CONTEXT.md](AGENT-CONTEXT.md)。新增 `--graph-url URL` 時只掛 `get_graph()`，
+透過 HTTP 讀目前的 graph demo API，排除既有 `assessment` 判定；不混入舊事故錄影。
+`--describe-context` 可列印完整模型輸入預覽，不呼叫模型。
+
 前端 HTTP／SSE 介面已整合至 `server/` 的 Guard Room FastAPI app，完整清單見
 [FRONTEND-API.md](FRONTEND-API.md)。新增介面以 `NIGHTWATCH_MOCK_DATA=1` 啟用模擬資料，
 預設關閉，不執行本頁的 agent loop。
@@ -20,7 +25,9 @@ PydanticAI 管理對話與 function-call 往返；本專案只處理 NightWatch 
 | `../contracts/` | 唯讀的 API、工具、報告與事故錄影 |
 | `nightwatch_agent/loop.py` | framework 接線、工具驗證、證據、預算與報告檢查 |
 | `nightwatch_agent/replay.py` | 讀取既有事故錄影；未錄下的查詢明確失敗 |
-| `nightwatch_agent/__main__.py` | CLI：離線重播或真模型查錄影 |
+| `nightwatch_agent/graph.py` | graph HTTP adapter、契約檢查、排除既有 assessment |
+| `nightwatch_agent/prompts.py` | 英文 System Prompt 與模型可見的工具描述 |
+| `nightwatch_agent/__main__.py` | CLI：錄影／graph API 調查與模型輸入預覽 |
 | `run-agent.sh` | 載入 `.env`、固定工作目錄與預設錄影路徑 |
 | `.env.example` | 設定範例，不含真實金鑰 |
 | `tests/test_loop.py` | 用 framework 的 FunctionModel 替身驗證程序與契約邊界 |
@@ -33,6 +40,7 @@ PydanticAI 管理對話與 function-call 往返；本專案只處理 NightWatch 
 
 | 工具 | 能查什麼 | 真資料應由誰提供 |
 | --- | --- | --- |
+| `get_graph` | 完整 graph 的觀測欄位、資料來源健康；排除既有 assessment | 指定的 graph HTTP API（目前是 demo 資料） |
 | `get_node_history` | 節點的歷史與基線，找最早偏離 | control 的快照 |
 | `get_node_detail` | 當前量測、資源、進出邊 | control 的 graph |
 | `find_traces` | 錯誤／慢請求的 trace ID | Jaeger |
@@ -44,13 +52,23 @@ PydanticAI 管理對話與 function-call 往返；本專案只處理 NightWatch 
 | `list_errors` | 多節點的錯誤先後順序 | 選配的 Guard Room |
 | `get_node_errors` | 某節點最新錯誤原文 | 選配的 Guard Room |
 
-舊版一般啟用前八個，Guard Room 啟用時共十個；沒有 runtime target 時會省略
+舊版通常啟用八個調查工具，加上 Guard Room 錯誤查詢時共十個；沒有 runtime target 時會省略
 `inspect_runtime`。這些是內部 function tools，**不是十條同名 HTTP API**。
 
 本 loop 接受 `capabilities.tools` 的既有名稱與 JSON schema，僅允許上述唯讀工具。
 資料實作透過 `backend(name, args)` 接入；未接上的工具就不要放進 capabilities。
-隨附錄影只包含 history、find_traces、get_trace、detail 四個，所以 CLI 只掛這四個。
+錄影模式只包含 history、find_traces、get_trace、detail 四個，所以該模式只掛這四個。
+`--graph-url` 模式只掛 `get_graph`；兩種模式各自建立對話與證據，工具不交叉使用。
 尚未提供 live Prometheus／Jaeger／runtime adapter；沒有把錄影當成 live fallback。
+
+```sh
+bash run-agent.sh --graph-url 'http://127.0.0.1:8001/api/graph?state=problem' --describe-context
+bash run-agent.sh --graph-url 'http://127.0.0.1:8001/api/graph?state=problem' --model
+```
+
+第一行只讀 API 並列印英文 prompt／tools 與開場，第二行才呼叫真模型。
+需先另行啟動 graph API。本輪沒有放寬既有根因報告的 history／trace 門檻；
+只讀 graph 可回報觀測與缺口，但仍會以 `inconclusive`／`unresolved` 結束。
 
 ## 跑起來
 

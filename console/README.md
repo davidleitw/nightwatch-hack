@@ -19,6 +19,35 @@ python3 console/serve.py --port 4173 --control-port 3300
 
 ## 功能與資料契約
 
+### 本機模擬與部署接線
+
+不需要啟動 shop 或 control，也不需要下載套件。在專案根目錄執行：
+
+```sh
+python3 console/build.py
+python3 -B console/serve.py --port 4174 --mock
+```
+
+開啟 <http://127.0.0.1:4174/?source=live&scenario=cycle#topology>。這是實際 HTTP 與 SSE 傳輸的**本機模擬 API**，不是事故錄影播放，也不是 shop 的即時量測。資料形狀與 13 個節點的位置取自既有 `state.initial.json`；數值由 `mock_control.py` 明確產生。只改變 `catalog` 的健康，不模擬事故、修復或 AI 結論。`unknown` 保持 `alive: true`，量測回 `null`，用來檢查缺資料不等於服務死亡。
+
+「模擬情境」可選正常、警告、異常、無資料、每 10 秒輪換、HTTP 503。選擇只影響此頁網址的 `scenario`；不修改真實後端。`/events` 先送 `state`，每 5 秒送 `graph`，每 2 秒送 `ping`。此健康模擬沒有 incident journal，也不驗證事故 cursor 重播。
+
+展開「後端接線」可查看目前來源、檢查 `/api/state` 格式及 SSE 的 `state`、`ping`／`graph`，並輸入 control API 網址產生啟動指令。輸入框**只產生指令**，不會直接修改正在執行的伺服器；檢查按鈕測的是目前來源。
+
+接真實後端時先停止模擬服務，再執行：
+
+```sh
+python3 -B console/serve.py --port 4174 --control-url http://127.0.0.1:3300
+```
+
+亦可設定 `NIGHTWATCH_CONTROL_URL`；命令列 `--control-url` 優先。舊的 `--control-port` 仍可用，未指定 URL 時才生效。網址可用 HTTP(S) 與路徑前綴，不接受網址內帳密、query 或 fragment。填入的是**前端伺服器可達的 control base URL**，不是購物網站首頁，也不是完整 `/api/state` URL。
+
+瀏覽器固定使用同源 `/api/*` 與 `/events`，由 `serve.py` 代理唯讀 GET，不轉送登入 Cookie 或 Authorization。伺服器只綁 `127.0.0.1`；對外部署請使用現有反向代理，`/events` 必須關閉 buffering 並允許長連線。此版本沒有新增認證、公開監聽或遠端設定 API。`/__console/config` 僅提供目前接線資訊，是 console 自己的端點，不屬於 control 契約。
+
+`--mock` 是明確開關，不會因真實後端連不上而自動退回假資料。若同時設定 URL 與 `--mock`，會拒絕啟動；使用 mock 前請取消 `NIGHTWATCH_CONTROL_URL`。正式靜態產物仍是 `console/dist/`，建置現在包含 `connect.js`。
+
+本次已建置並在 Chrome 開啟模擬頁，看到 13 節點、catalog 警告與模擬即時連線。其餘情境切換與接線按鈕交由使用者自行操作；真實 shop、遠端 HTTP(S) 代理與部署反向代理尚未驗證。
+
 - 拓樸讀取 `GET /api/state` 的 `capabilities.nodes[].layout` 與 `graph_now`，節點數量與 ID 不寫死；只繪製資料中的實際連線。搜尋與健康篩選將無關節點變淡，不自行隱藏或重排其他服務。
 - 健康使用 `status`，Agent 判定使用 `assessment`，節點主要量測取 `primary_axis`。點節點可查看五軸量測、後端趨勢與相鄰連線。缺量測顯示「—」，`observed:false` 連線使用虛線，不表示斷線。
 - 事故列表讀取 `GET /api/incidents`，依偵測時間新到舊排列；搜尋 ID、故障卡與狀態，篩選處理中／已結束。點事故讀取 `GET /api/incidents/{id}`，顯示摘要、根因與證據；定位節點時顯示目前快照，不冒充歷史快照。

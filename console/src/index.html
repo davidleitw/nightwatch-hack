@@ -12,6 +12,19 @@
 <header><a class="brand" href="#topology"><span class="brand-mark" aria-hidden="true">◉</span>NightWatch</a><nav aria-label="主要導覽"><a href="#topology" id="nav-topology">服務拓樸</a><a href="#incidents" id="nav-incidents">事故列表 <span id="nav-count">—</span></a></nav><div class="header-end"><span id="connection" role="status">載入中</span><label class="source-select">資料來源<select id="source"><option value="live">即時 API</option><option value="recording">專案事故錄影</option></select></label></div></header>
 <main>
   <div id="errors" role="alert"></div>
+  <details id="connection-setup" class="connection-setup">
+    <summary>後端接線</summary>
+    <div class="connection-body">
+      <p>目前連線：<strong id="connection-target">正在讀取…</strong></p>
+      <div class="connection-check-row"><button id="check-connection" type="button" disabled>檢查目前連線</button><span id="connection-check" role="status">檢查狀態 API 與即時推播；不會修改後端。</span></div>
+      <label for="control-url">部署時的 control API 網址</label>
+      <input id="control-url" type="url" placeholder="http://127.0.0.1:3300" spellcheck="false" autocomplete="off">
+      <p>填入前端伺服器能連到的 control 網址。購物網站首頁不是狀態 API。</p>
+      <pre id="connect-command" aria-label="啟動指令"></pre>
+      <p id="command-note"></p>
+    </div>
+  </details>
+  <div id="mock-banner" class="mock-banner" hidden><div><strong>本機模擬 · 非真實 shop 狀態</strong><span>沿用舊錄影的 13 節點；只模擬 catalog 健康，不產生事故或 AI 結論。</span></div><label>模擬情境 <select id="mock-scenario"><option value="cycle">每 10 秒輪換</option><option value="ok">正常</option><option value="warning">警告</option><option value="failing">異常</option><option value="unknown">無資料</option><option value="unavailable">後端無法使用（503）</option></select></label></div>
   <div id="recording" hidden><div><strong>事故錄影</strong><span>catalog_pool_leak · 2026-09-10 · 非目前系統狀態</span></div><label>事故時間 <input id="replay-time" type="range" min="0" max="180" value="60" step="5"><output id="replay-label">+60 秒</output></label></div>
   <div class="page-heading"><div><div class="eyebrow">NIGHTWATCH / 觀測工作台</div><h1 id="page-title">服務拓樸</h1><p id="page-description">從服務關聯、量測與判定，掌握系統狀態。</p></div><button id="refresh" class="button">↻ 更新資料</button></div>
   <section id="topology-view">

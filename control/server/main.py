@@ -14,6 +14,7 @@ from logs import LogHub, create_log_router
 from graph_state import GraphStore
 
 from frontend_api import install_frontend
+from investigation_api import install_investigations
 
 
 class Trend(BaseModel):
@@ -152,7 +153,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 log_hub = LogHub()
-app.include_router(create_log_router(log_hub))
+app.include_router(create_log_router(log_hub, include_events=False))
 
 
 @app.get("/api/graph", response_model=Graph, summary="Get current monitor graph snapshot")
@@ -165,7 +166,8 @@ def get_graph(
     return dummy_graph(state) if state is not None else Graph.model_validate(app.state.graph_store.snapshot)
 
 
-install_frontend(app, graph_provider=dummy_graph)
+install_frontend(app, graph_provider=dummy_graph, log_hub=log_hub)
+install_investigations(app)
 
 
 if __name__ == "__main__":

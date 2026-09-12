@@ -109,14 +109,13 @@ class LogHub:
         return queue
 
 
-def create_log_router(hub: LogHub) -> APIRouter:
+def create_log_router(hub: LogHub, *, include_events=True) -> APIRouter:
     router = APIRouter()
 
     @router.post("/api/logs", response_model=LogReceipt)
     async def ingest_logs(batch: LogBatch):
         return hub.accept(batch.logs)
 
-    @router.get("/events")
     async def events():
         async def stream():
             queue = hub.subscribe()
@@ -137,4 +136,6 @@ def create_log_router(hub: LogHub) -> APIRouter:
         return StreamingResponse(stream(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+    if include_events:
+        router.add_api_route("/events", events, methods=["GET"])
     return router
