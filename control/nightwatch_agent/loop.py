@@ -7,6 +7,7 @@ import copy
 import json
 import os
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
@@ -22,6 +23,7 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 from .prompts import SYSTEM_PROMPT, tool_description
 
 Json = dict[str, Any]
+ContextCallback = Callable[[Json], None]
 TOOL_CAPS = {
     "get_graph": 16384,
     "get_node_history": 3072,
@@ -127,6 +129,11 @@ class Investigation:
         if self.on_event:
             self.on_event(event)
 
+    @staticmethod
+    def call_id() -> str:
+        """Return an opaque identifier shared by one tool call's events."""
+        return "call-" + uuid.uuid4().hex
+
 
 @dataclass
 class LoopResult:
@@ -152,7 +159,8 @@ def make_tool(definition: Json) -> Tool[Investigation]:
         if state.calls >= state.limits.max_tool_calls:
             return {"error": "budget_exhausted: return your final response now", "budget": state.budget()}
         state.calls += 1  # Invalid arguments also consume the contract's call budget.
-        state.emit("tool.started", tool=name, args=args)
+        call_id = state.call_id()
+        state.emit("tool.started", call_id=call_id, tool=name, args=args)
         try:
             validator.validate(args)  # Tool.from_schema does not validate these itself.
             if name == "get_trace" and args["trace_id"] not in state.trace_ids:
@@ -165,8 +173,8 @@ def make_tool(definition: Json) -> Tool[Investigation]:
                 raise ValueError(result["error"])
         except (ValidationError, ValueError, LookupError, OSError, TimeoutError) as error:
             message = safe_error(error)
-            state.emit("tool.failed", tool=name, args=args, error=message)
-            return {"error": message, "budget": state.budget()}
+            state.emit("tool.failed", call_id=call_id, tool=name, args=args, error=message)
+            return {"error": message, "call_id": call_id, "budget": state.budget()}
         evidence_id = f"ev-{len(state.evidence) + 1:04d}"
         evidence = {
             "id": evidence_id, "tool": name, "args": args, "source": observed.source,
@@ -175,8 +183,8 @@ def make_tool(definition: Json) -> Tool[Investigation]:
         state.evidence.append(evidence)
         if name == "find_traces":
             state.trace_ids.update(row["trace_id"] for row in result.get("traces", []) if "trace_id" in row)
-        state.emit("observation.recorded", evidence=evidence)
-        return {"result": result, "evidence_id": evidence_id, "budget": state.budget()}
+        state.emit("observation.recorded", call_id=call_id, evidence=evidence, evidence_id=evidence_id)
+        return {"result": result, "evidence_id": evidence_id, "call_id": call_id, "budget": state.budget()}
 
     tool = Tool.from_schema(
         call, name=name, description=tool_description(definition),
@@ -228,6 +236,7 @@ async def investigate(
     *, model: Model | str, capabilities: Json, opening: Json, report_schema: Json,
     backend: Backend, limits: Limits | None = None,
     on_event: Callable[[Json], None] | None = None,
+    on_context: ContextCallback | None = None,
 ) -> LoopResult:
     """One incident per invocation. The caller supplies an already sanitized opening."""
     limits = limits or Limits()
@@ -238,14 +247,31 @@ async def investigate(
     names = [definition["name"] for definition in definitions]
     if len(names) != len(set(names)) or set(names) - TOOL_CAPS.keys():
         raise ValueError("工具名稱重複或不是 NightWatch 唯讀工具")
+    model_settings = {
+        "timeout": limits.request_timeout_secs, "max_tokens": 4096,
+        "openai_store": False, "openai_prompt_cache_key": "nightwatch-python-agent-v1",
+    }
+    instructions = static_instructions(capabilities, report_schema)
+    tools_context = [
+        {"name": definition["name"], "description": tool_description(definition),
+         "parameters": copy.deepcopy(definition["parameters"])}
+        for definition in definitions
+    ]
+    opening_context = {**copy.deepcopy(opening), "budget": state.budget()}
+    model_name = model if isinstance(model, str) else getattr(model, "model_name", type(model).__name__)
+    if on_context:
+        on_context({
+            "instructions": instructions,
+            "tools": tools_context,
+            "opening": opening_context,
+            "model": {"name": str(model_name), "settings": copy.deepcopy(model_settings)},
+            "messages": [],
+        })
     agent = Agent(
         model, deps_type=Investigation, output_type=str,
-        instructions=static_instructions(capabilities, report_schema),
+        instructions=instructions,
         tools=[make_tool(definition) for definition in definitions], retries=1,
-        model_settings={
-            "timeout": limits.request_timeout_secs, "max_tokens": 4096,
-            "openai_store": False, "openai_prompt_cache_key": "nightwatch-python-agent-v1",
-        },
+        model_settings=model_settings,
     )
 
     @agent.output_validator
@@ -283,4 +309,18 @@ async def investigate(
     usage_data = asdict(usage)
     if usage_data["cost"] is not None:
         usage_data["cost"] = str(usage_data["cost"])
+    if on_context:
+        from pydantic_ai.messages import ModelMessagesTypeAdapter
+
+        # PydanticAI messages are dataclasses rather than Pydantic models.  Its
+        # adapter preserves tool calls/returns and applies the framework's JSON
+        # redaction rules to arbitrary tool content.
+        serialized_messages = json.loads(ModelMessagesTypeAdapter.dump_json(messages))
+        on_context({
+            "instructions": instructions,
+            "tools": tools_context,
+            "opening": opening_context,
+            "model": {"name": str(model_name), "settings": copy.deepcopy(model_settings)},
+            "messages": serialized_messages,
+        })
     return LoopResult(status, reason, report, state.evidence, state.events, usage_data, messages)

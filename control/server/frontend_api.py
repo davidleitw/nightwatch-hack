@@ -242,7 +242,7 @@ def install_frontend(app, graph_provider):
     def openapi():
         if app.openapi_schema is None:
             document = get_openapi(title=app.title, version=app.version, routes=app.routes,
-                                  description="Graph 維持既有 dummy API。其他前端介面以 NIGHTWATCH_MOCK_DATA=1 啟用假資料，預設關閉；X-NightWatch-Mock 回應標頭標示模式。")
+                                  description="Graph 維持既有 dummy API。舊版事故與操作介面以 NIGHTWATCH_MOCK_DATA=1 啟用假資料，新的 persistent investigation API 使用獨立的 SQLite session store；X-NightWatch-Mock 回應標頭標示舊版模式。")
             definitions = document.setdefault("components", {}).setdefault("schemas", {})
             for name in ("state", "readiness", "snapshot", "node", "edge", "faults", "fault-catalog", "report", "timeline", "agent-report", "incident-commit"):
                 definitions[name] = convert(json.loads((SCHEMAS / f"{name}.schema.json").read_text()))
