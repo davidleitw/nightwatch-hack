@@ -79,7 +79,7 @@ def unavailable_readiness():
         "next_step_zh": "等待服務啟動"}
 
 
-def install_frontend(app, graph_provider):
+def install_frontend(app, graph_provider, log_hub=None):
     flag = os.getenv("NIGHTWATCH_MOCK_DATA", "0")
     if flag not in ("0", "1"):
         raise ValueError("NIGHTWATCH_MOCK_DATA 只能是 0 或 1")
@@ -179,6 +179,23 @@ def install_frontend(app, graph_provider):
         cursor = query.get("cursor", request.headers.get("last-event-id"))
         if cursor is not None and not re.fullmatch(r"[^:]+:[0-9]+", cursor):
             raise APIError(400, "invalid_request", "cursor 必須是 <run_id>:<revision>")
+        if store is None and log_hub is not None:
+            async def logs_only():
+                queue = log_hub.subscribe()
+                try:
+                    yield ": log-only; state backend unavailable\n\n"
+                    while not await request.is_disconnected():
+                        try:
+                            payload = await asyncio.wait_for(queue.get(), timeout=2)
+                        except asyncio.TimeoutError:
+                            yield "event: ping\ndata: {}\n\n"
+                            continue
+                        if payload is None:
+                            return
+                        yield "event: log\ndata: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+                finally:
+                    log_hub.subscribers.discard(queue)
+            return StreamingResponse(logs_only(), media_type="text/event-stream", headers={**headers, "X-Accel-Buffering": "no"})
         state, journal = required_store().stream_snapshot()
         revision = journal[-1]["revision"] if journal else 0
         if cursor:
@@ -193,33 +210,44 @@ def install_frontend(app, graph_provider):
             return f"{event_id}event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
         async def stream():
-            previous = state
-            last_revision = revision
-            yield frame("state", state)
-            for commit in journal:
-                if commit["revision"] > last_revision:
-                    yield frame("incident", commit)
-                    last_revision = commit["revision"]
-            ping_at = time.monotonic() + 2
-            while not await request.is_disconnected():
-                current, commits = store.stream_snapshot()
-                if current["run"]["id"] != previous["run"]["id"]:
-                    last_revision = 0
-                    yield frame("run", {"run_id": current["run"]["id"]})
-                    yield frame("state", current)
-                else:
-                    for field in ("readiness", "faults"):
-                        if current[field] != previous[field]:
-                            yield frame(field, current[field])
-                for commit in commits:
+            queue = log_hub.subscribe() if log_hub is not None else None
+            try:
+                previous = state
+                last_revision = revision
+                yield frame("state", state)
+                for commit in journal:
                     if commit["revision"] > last_revision:
                         yield frame("incident", commit)
                         last_revision = commit["revision"]
-                if time.monotonic() >= ping_at:
-                    yield frame("ping", {"server_now": timestamp()})
-                    ping_at = time.monotonic() + 2
-                previous = current
-                await asyncio.sleep(0.2)
+                ping_at = time.monotonic() + 2
+                while not await request.is_disconnected():
+                    if queue is not None:
+                        while not queue.empty():
+                            payload = queue.get_nowait()
+                            if payload is None:
+                                return
+                            yield frame("log", payload)
+                    current, commits = store.stream_snapshot()
+                    if current["run"]["id"] != previous["run"]["id"]:
+                        last_revision = 0
+                        yield frame("run", {"run_id": current["run"]["id"]})
+                        yield frame("state", current)
+                    else:
+                        for field in ("readiness", "faults"):
+                            if current[field] != previous[field]:
+                                yield frame(field, current[field])
+                    for commit in commits:
+                        if commit["revision"] > last_revision:
+                            yield frame("incident", commit)
+                            last_revision = commit["revision"]
+                    if time.monotonic() >= ping_at:
+                        yield frame("ping", {"server_now": timestamp()})
+                        ping_at = time.monotonic() + 2
+                    previous = current
+                    await asyncio.sleep(0.2)
+            finally:
+                if queue is not None:
+                    log_hub.subscribers.discard(queue)
         return StreamingResponse(stream(), media_type="text/event-stream", headers={**headers, "X-Accel-Buffering": "no"})
 
     def convert(value):
@@ -242,7 +270,7 @@ def install_frontend(app, graph_provider):
     def openapi():
         if app.openapi_schema is None:
             document = get_openapi(title=app.title, version=app.version, routes=app.routes,
-                                  description="Graph 維持既有 dummy API。其他前端介面以 NIGHTWATCH_MOCK_DATA=1 啟用假資料，預設關閉；X-NightWatch-Mock 回應標頭標示模式。")
+                                  description="Graph 維持既有 dummy API。舊版事故與操作介面以 NIGHTWATCH_MOCK_DATA=1 啟用假資料，新的 persistent investigation API 使用獨立的 SQLite session store；X-NightWatch-Mock 回應標頭標示舊版模式。")
             definitions = document.setdefault("components", {}).setdefault("schemas", {})
             for name in ("state", "readiness", "snapshot", "node", "edge", "faults", "fault-catalog", "report", "timeline", "agent-report", "incident-commit"):
                 definitions[name] = convert(json.loads((SCHEMAS / f"{name}.schema.json").read_text()))

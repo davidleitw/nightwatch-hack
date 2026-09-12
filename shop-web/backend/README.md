@@ -44,6 +44,33 @@
 
 另提供 `POST /api/carts/{cart_id}/checkout`，request 只有 `{name, address}`。後端以目前商品價格建立訂單，成功回傳 201，並在同一個 SQLite transaction 中清空購物車；未知購物車回傳 404，空購物車回傳 400，欄位不符回傳 422。訂單 response 包含 `id`、`created_at`、`total` 與商品快照 `items`；配送姓名與地址會保存於資料庫 payload。
 
+## Demo 故障卡與結帳故障注入
+
+`/api/demo-faults` 是單一 Uvicorn process 內的記憶體控制 API。GET、POST、DELETE 成功都回傳相同格式：
+
+```json
+{
+  "cards": [
+    {"fault_id": "checkout_exception", "title": "結帳例外", "description": "..."},
+    {"fault_id": "database_write_lock", "title": "資料庫寫入鎖", "description": "..."},
+    {"fault_id": "checkout_delay", "title": "結帳延遲", "description": "..."}
+  ],
+  "active": {
+    "fault_id": "checkout_delay",
+    "started_at": "2026-09-12T00:00:00.000Z",
+    "expires_at": "2026-09-12T00:01:00.000Z",
+    "remaining_seconds": 59.9,
+    "status": "active"
+  },
+  "lease_seconds": 60,
+  "delay_seconds": 10
+}
+```
+
+POST body 為 `{ "fault_id": "..." }`，故障卡一次只能啟用一張；未知 ID 或多餘欄位回傳 422，已有 active、activating 或 restoring 狀態回傳 409。DELETE 不帶 body 且可重複呼叫，回傳 `active: null`。lease 固定 60 秒，以 monotonic clock 判斷期限，`expires_at` 與 `started_at` 僅供 UTC UI 顯示；期限到期前後都會先完成資源清理才允許下一次啟用。
+
+三張卡的行為如下：`checkout_exception` 在兩個 checkout transaction 的實際 order/cart 寫入後、commit 前 raise `RuntimeError`，因此整筆 transaction rollback；`database_write_lock` 由專用 thread 建立並持有自己的 SQLite connection 與 `BEGIN IMMEDIATE`，成功取得後才回報 active，取得失敗會釋放並回傳錯誤；`checkout_delay` 在兩個 checkout 入口的 transaction 前以非阻塞方式等待 10 秒，DELETE 或自動清理會喚醒等待中的 request。故障 request 的 log 只記 fault ID、method、path、status 與 duration，不記 request body。
+
 SQLite 預設使用 `/data/shop.db`，由 Compose 的 `shop-data` named volume 保存。商品只在資料庫第一次初始化時種子一次；重啟不會重新加入已刪除商品，既有 orders 會保留自己的商品快照。
 
 ## 架構與執行
@@ -83,4 +110,4 @@ make up
 make test
 ```
 
-目前已完成預設 8080/8000 環境驗證：兩個 containers 建置與重建成功，10 項 backend 整合測試全部通過，`make smoke` 及商品、購物車、結帳 API 流程通過，containers 均為 healthy，OpenAPI 含 9 個 paths 與 `ProductResponse`、`CartResponse`、`OrderResponse` schemas。尚未執行 browser 自動化；前端仍以 `localStorage` 保存購物袋，未串接 cart CRUD 或 cart checkout API。
+目前已完成預設 8080/8000 環境驗證：兩個 containers 建置與重建成功，10 項 backend 整合測試全部通過，`make smoke` 及商品、購物車、結帳 API 流程通過，containers 均為 healthy，OpenAPI 含 10 個 paths 與 `ProductResponse`、`CartResponse`、`OrderResponse` schemas。另以 isolated backend image 實測三張 demo fault、兩種 rollback、10 秒 delay/DELETE 喚醒、SQLite lock 約 10.18 秒 timeout 與清理；backend restart 後 fault inactive 且寫入恢復，log 含 traceback、500 status 與 fault ID。Chrome CDP 已實測事件頁真實 DOM 啟用/解除並取得 desktop/mobile 截圖；visual review 確認 desktop 三卡完整、390px mobile 單欄無溢出，`main.py`/`demo_faults.py` workspace 與 container hash 一致，前端部署 asset 為本次 production build。`checkout_delay` 的 TTL 自動喚醒已驗證，`database_write_lock` 的 60 秒自動到期尚未單獨驗證。前端仍以 `localStorage` 保存購物袋，未串接 cart CRUD 或 cart checkout API。

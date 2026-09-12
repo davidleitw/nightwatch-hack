@@ -23,6 +23,7 @@ make up
 本專案測試與 demo 使用固定的本機連接埠：
 
 - 商店前端：<http://localhost:8080/>
+- 故障演練頁：<http://localhost:8080/#/events>
 - FastAPI Swagger UI：<http://localhost:8000/docs>
 - 經 Nginx 代理的健康檢查：<http://localhost:8080/api/health>
 
@@ -30,7 +31,15 @@ Compose 預設 project name 是 `nightwatch-shop-web`，因此訂單 volume 的�
 
 ## Makefile 指令
 
-Makefile 預設使用 `docker compose`，並以 `nightwatch-shop-web` 作為 Compose project name；所有指令都使用上述本機測試/demo 環境。若主機只有舊版獨立 Compose CLI，可加上 `COMPOSE=docker-compose`，連接埠與 project name 不變。
+```sh
+./restart.sh          # 重建並重啟
+./restart.sh --close  # 停止服務，保留容器與資料
+./restart.sh --open   # 啟動服務，不重新 build（需已有 images）
+```
+
+執行 `./restart.sh` 可重建並重啟前後端、保留訂單資料，等待健康檢查並驗證 API。腳本可從任意工作目錄呼叫，預設沿用現有容器的 ports；尚未啟動時使用前端 8080、後端 8000。可用 `FRONTEND_PORT`、`BACKEND_PORT`、`PROJECT_NAME` 環境變數覆寫。失敗時輸出容器狀態與最近日誌。
+
+Makefile 預設使用 `docker compose`，並在每個 Compose 指令加入 `-p $(PROJECT_NAME)`；預設值是 `PROJECT_NAME=nightwatch-shop-web`，設定來源都是 `compose.yaml`。也可以用 `COMPOSE=docker-compose` 指定舊版獨立 Compose CLI。下表的 Docker 指令以預設 project name 展開；若覆寫 `PROJECT_NAME`，請將 `nightwatch-shop-web` 換成指定的值。
 
 | 指令 | 用途 | 等價 Docker Compose 操作 |
 | --- | --- | --- |
@@ -62,11 +71,18 @@ docker exec nightwatch-shop-web_backend_1 python -m unittest discover -s tests -
 
 後端另提供匿名購物車 CRUD 與購物車結帳 API，但前端尚未串接這些 cart API，完整 endpoint、request/response 欄位與錯誤狀態碼請見 [docs/API.md](docs/API.md)。這是本機購物 demo，不串接金流、扣款或出貨，請勿填寫真實個人資料。
 
+### 故障演練頁
+
+從商店頁的「故障演練」入口，或直接開啟 <http://localhost:8080/#/events>。頁面提供三張固定故障卡：`checkout_exception` 會讓 `POST /api/orders` 與購物車 checkout 回傳 500 並 rollback；`database_write_lock` 會讓 SQLite 寫入最多等待 10 秒後失敗；`checkout_delay` 會讓兩條結帳路由延遲 10 秒。啟用後請回到商店手動操作，事件頁不會自動建立訂單。
+
+事件頁透過 `GET /api/demo-faults` 讀取 server 狀態，以 `POST /api/demo-faults` 搭配 `{ "fault_id": "checkout_exception" }` 啟用，並以 `DELETE /api/demo-faults` 解除。三個成功操作都回傳相同的故障狀態格式；`active` 會帶 `fault_id`、UTC ISO 時間、`remaining_seconds` 與 `status`。同時間只能有一張卡作用中，`activating`、`active`、`restoring` 都以 server 狀態為準；成功取得 lease 後 60 秒自動解除，也可手動解除。頁面約每 2 秒輪詢一次，操作期間會停用重送並把 API 錯誤顯示出來。
+
 ## API 摘要
 
 - 商品：`GET/POST /api/products`、`GET/PUT/PATCH/DELETE /api/products/{id}`。
 - 匿名購物車：建立、讀取、刪除購物車，以及購物車商品新增累加、查詢、數量更新、移除與清空。
 - 結帳與訂單：保留 `POST /api/orders`，另提供 `POST /api/carts/{cart_id}/checkout` 建立訂單並清空購物車。
+- 故障演練：`GET/POST/DELETE /api/demo-faults` 控制三種可恢復的 backend 示範故障；完整 response 與狀態見 [docs/API.md](docs/API.md)。
 - 健康檢查：`GET /api/health` 回傳 `{"status":"ok"}`。
 
 ## 資料與服務說明
@@ -91,7 +107,11 @@ Backend 的 `shop` logger 預設使用 `LOG_LEVEL=INFO` 與 `LOG_DIR=/logs`。�
 
 uv `lock --check` 通過，fresh export 與 `requirements.txt` 的依賴內容一致；runtime 使用 UID 10001 的 `.venv` Uvicorn，`/data` 與 `/logs` 可由 `app` 寫入。`app.log` 的 UTC ISO/INFO startup、migration、HTTP 200/201/204/404/422、無 query path，以及 INFO/ERROR traceback、每日輪替與 restart 後 `/logs` 保留均通過檢查。
 
-尚未執行 browser 自動化與 HTTP 500 error path；破壞性 `make clean CONFIRM=yes` 尚未執行。`make help` 與未帶 `CONFIRM=yes` 的 clean guard 已驗證。前端購物袋仍使用 `localStorage`，未串接 cart API。
+破壞性 `make clean CONFIRM=yes` 尚未執行。`make help` 與未帶 `CONFIRM=yes` 的 clean guard 已驗證。前端購物袋仍使用 `localStorage`，未串接 cart API。
+
+本次故障演練頁已在 production Docker 環境驗證：`make up COMPOSE=docker-compose` 建置兩個 images 並啟動 frontend/backend，`make test COMPOSE=docker-compose` 的既有 10 tests 全部通過，`make smoke` 通過首頁與 health。真 HTTP 驗證包含 `/api/demo-faults` cards 與 busy 409、兩個 checkout 入口的 `checkout_exception` rollback、`database_write_lock` 約 10.18 秒後回傳 500、控制 DELETE 即時生效並恢復寫入，以及 `checkout_delay` 手動解除約 0.83 秒喚醒；另驗證剩餘約 8.64 秒時由 TTL 自動喚醒、backend restart 後 fault inactive 且寫入恢復。log 含 traceback、500 status 與 fault ID。
+
+以 Chrome CDP 真實 DOM 點擊驗證事件頁啟用與解除，並取得 desktop/mobile 截圖；visual review 確認 desktop 三卡完整、390px mobile 單欄無溢出。`main.py`/`demo_faults.py` workspace 與 container hash 一致，前端部署 asset 為本次 production build。未宣稱三張卡都完成自動到期驗證：本次 TTL 自動喚醒實測為 `checkout_delay`，`database_write_lock` 的 60 秒自動到期尚未單獨驗證。主機直接在 `shop-web/frontend` 執行 `npm run build` 仍因本機 `node_modules` 缺少 `vite` 以 exit 127 結束；Docker production build 已成功，兩者限制不同。
 
 ## 文件與交付紀錄
 

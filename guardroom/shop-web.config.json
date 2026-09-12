@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "monitor_log": "../control/tmp/monitor.jsonl",
+  "snapshot_path": ".run/shop-web.graph-state.json",
+  "window_seconds": 60,
+  "history": {
+    "directory": ".run/snapshots",
+    "interval_seconds": 5,
+    "retention_seconds": 900
+  },
+  "monitors": [
+    {"monitor_id": "shop.health", "node_id": "shop-health", "kind": "service"},
+    {"monitor_id": "shop.products", "node_id": "shop-products", "kind": "service"},
+    {"monitor_id": "shop.db.query", "node_id": "shop-db", "kind": "datastore"}
+  ],
+  "edges": [
+    {"from": "shop.health", "to": "shop.db.query", "kind": "calls"},
+    {"from": "shop.products", "to": "shop.db.query", "kind": "calls"}
+  ]
+}
