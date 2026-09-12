@@ -269,8 +269,13 @@ function renderGraph() {
   }).join(''));
   updateGraphMarkup('nodes', graph.nodes.map(n => {
     const p = positions.get(n.id);
-    const values = {traffic: number(n.traffic, ' req/s'), errors: number(n.errors, '%', 100), latency: number(n.p95_ms, ' ms'), saturation: number(n.saturation, '%', 100), liveness: n.alive === true ? 'alive: true' : n.alive === false ? 'alive: false' : '—'};
-    return `<button class="graph-node ${esc(n.kind)} ${selectedNode === n.id ? 'selected' : ''} ${matches.has(n.id) ? '' : 'dim'}" data-node="${esc(n.id)}" style="left:${p.x}px;top:${p.y}px" aria-pressed="${selectedNode === n.id}"><span class="node-name">${esc(n.id)}</span><span class="node-meta ${esc(n.status)}"><span><i class="dot ${esc(n.status)}"></i>${esc(health[n.status])}</span><span>觀測</span></span><span class="node-value">${esc(values[n.primary_axis] ?? '主要量測 —')}</span></button>`;
+    const readings = {traffic: n.traffic, errors: n.errors, latency: n.p95_ms, saturation: n.saturation};
+    const labels = {traffic: '流量', errors: '錯誤率', latency: 'P95', saturation: '飽和度', liveness: '存活訊號'};
+    const preferred = n.kind === 'datastore' ? ['latency', 'traffic', 'errors', 'saturation'] : ['queue', 'volume'].includes(n.kind) ? ['saturation', 'traffic', 'latency', 'errors'] : ['traffic', 'latency', 'errors', 'saturation'];
+    const axis = n.primary_axis ?? preferred.find(key => Number.isFinite(readings[key]));
+    const values = {traffic: number(n.traffic, ' req/s'), errors: number(n.errors, '%', 100), latency: number(n.p95_ms, ' ms'), saturation: number(n.saturation, '%', 100), liveness: n.alive === true ? 'true' : n.alive === false ? 'false' : '—'};
+    const primary = axis ? `${labels[axis]} ${values[axis] === '—' ? '未回報' : values[axis]}` : '尚無量測';
+    return `<button class="graph-node ${esc(n.kind)} ${selectedNode === n.id ? 'selected' : ''} ${matches.has(n.id) ? '' : 'dim'}" data-node="${esc(n.id)}" style="left:${p.x}px;top:${p.y}px" aria-pressed="${selectedNode === n.id}"><span class="node-name">${esc(n.id)}</span><span class="node-meta ${esc(n.status)}"><span><i class="dot ${esc(n.status)}"></i>${esc(health[n.status])}</span><span>觀測</span></span><span class="node-value">${esc(primary)}</span></button>`;
   }).join(''));
   $('nodes').querySelectorAll('[data-node]').forEach(button => button.onclick = () => locateNode(button.dataset.node));
   updateGraphMarkup('sources', '<span>觀測來源</span>' + ['prometheus', 'jaeger', 'logstore'].map(key => {
