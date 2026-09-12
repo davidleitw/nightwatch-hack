@@ -1,5 +1,13 @@
 const phases = new Set(['baseline','detected','investigating','awaiting_approval','executing','verifying','recovered','unresolved','closed']);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+let localMock = false;
+export function setMockMode(enabled) { localMock = enabled; }
+export function apiPath(path) {
+  if (!localMock) return path;
+  const url = new URL(path, location.origin);
+  url.searchParams.set('scenario', new URLSearchParams(location.search).get('scenario') || 'cycle');
+  return url.pathname + url.search;
+}
 export function validateIncident(value, detail = false) {
   if (!object(value) || typeof value.id !== 'string' || !value.id || !phases.has(value.phase) || typeof value.detected_at !== 'string' || !Number.isFinite(Date.parse(value.detected_at))) throw new Error('事故資料格式不符：需要 id、phase 與 detected_at。');
   if (detail && value.nodes !== undefined && !Array.isArray(value.nodes)) throw new Error('事故 nodes 不是陣列。');
@@ -37,7 +45,7 @@ export async function readJSON(path) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
-    const response = await fetch(path, {signal:controller.signal, cache:'no-store', headers:{Accept:'application/json'}});
+    const response = await fetch(path.startsWith('/api/') ? apiPath(path) : path, {signal:controller.signal, cache:'no-store', headers:{Accept:'application/json'}});
     const text = await response.text();
     let data;
     try { data = JSON.parse(text); } catch { throw new Error(`${path} 回傳非 JSON 資料（HTTP ${response.status}）。`); }

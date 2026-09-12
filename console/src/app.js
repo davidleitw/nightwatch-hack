@@ -1,4 +1,5 @@
-import {readJSON,validateState,validateGraph,validateIncident,loadRecording,projectRecording} from './data.js';
+import {apiPath,readJSON,validateState,validateGraph,validateIncident,loadRecording,projectRecording} from './data.js';
+import {setupConnection} from './connect.js';
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const phaseNames={baseline:'基線收集中',detected:'偵測到異常',investigating:'排查中',awaiting_approval:'等待批准',executing:'執行修復中',verifying:'驗證中',recovered:'已修復',unresolved:'未解決',closed:'已結案'};
@@ -12,12 +13,13 @@ const time=value=>value && Number.isFinite(Date.parse(value))?new Date(value).to
 const number=(value,unit='',factor=1)=>typeof value==='number'&&Number.isFinite(value)?`${(value*factor).toLocaleString('en-US',{maximumFractionDigits:1})}${unit}`:'—';
 const source=new URLSearchParams(location.search).get('source')==='recording'?'recording':'live';
 let journal=[], journalFilter="all";
+let localMock=false;
 let state=null, incidents=[], selectedNode=null, selectedIncident=null, incidentDetail=null, recording=null;
 let zoom=1, autoFit=true, filterStatus='all', listNote='', stream=null, retryTimer=null, refreshTimer=null, freshnessTimer=null, refreshBusy=false, refreshAgain=false;
 let lastActivity=0, retryDelay=1000, cursor=0, detailRequest=0, shapeKey='', snapshotWidth=0, snapshotHeight=0;
 const errors=new Map();
 function error(key,message){if(message)errors.set(key,message);else errors.delete(key);$('errors').innerHTML=[...errors.values()].map(message=>`<div class="error">${esc(message)}</div>`).join('');}
-function connection(label,kind=''){ $('connection').textContent=label; $('connection').className=kind; }
+function connection(label,kind=''){ $('connection').textContent=(localMock && source==='live'?'模擬 · ':'')+label; $('connection').className=kind; }
 function badge(incident){return `<span class="badge ${!isClosed(incident)?'active':['unresolved','closed'].includes(incident.phase)&&incident.outcome!=='recovered'?'failed':''}">${esc(phaseNames[incident.phase]||incident.phase)}</span>`;}
 function allIncidents(){const map=new Map(incidents.map(i=>[i.id,i]));if(state?.incident)map.set(state.incident.id,{...map.get(state.incident.id),...state.incident});return [...map.values()].sort((a,b)=>Date.parse(b.detected_at)-Date.parse(a.detected_at));}
 function primary(node){const axis=node.primary_axis;const values={traffic:number(node.traffic,' req/s'),errors:number(node.errors,'%',100),latency:number(node.p95_ms,' ms'),saturation:number(node.saturation,'%',100),liveness:node.alive===true?'存活':node.alive===false?'無回應':'—'};const labels={traffic:'請求量',errors:'錯誤率',latency:'P95',saturation:node.sat_label||'飽和度',liveness:'存活'};return axis?`${labels[axis]||axis} ${values[axis]||'—'}`:'主要量測 —';}
@@ -53,7 +55,7 @@ function renderGraph(){
   $('nodes').innerHTML=graph.nodes.map(n=>{const p=positions.get(n.id);return `<button class="graph-node ${esc(n.kind)} ${esc(n.assessment)} ${n.id===selectedNode?'selected':''} ${matches.has(n.id)?'':'dim'}" style="left:${p.x}px;top:${p.y}px" data-node="${esc(n.id)}" aria-label="選取 ${esc(n.id)}" aria-pressed="${n.id===selectedNode}"><span class="node-name">${esc(n.id)}</span><span class="node-meta"><span class="${esc(n.status)}"><i class="dot ${esc(n.status)}"></i>${statusNames[n.status]}</span><span class="node-assessment">${n.assessment==='unassessed'?kinds[n.kind]||n.kind:assessmentNames[n.assessment]}</span></span><span class="node-value">${esc(primary(n))}</span></button>`;}).join('');
   $('nodes').querySelectorAll('[data-node]').forEach(button=>button.onclick=()=>{selectedNode=button.dataset.node;renderGraph();renderNode();$('nodes').querySelectorAll('[data-node]').forEach(b=>{if(b.dataset.node===selectedNode)b.focus({preventScroll:true});});});
   $('sources').innerHTML=`<span>資料來源健康${source==='recording'?'（錄影當時）':''}</span>`+['prometheus','jaeger','logstore'].map(key=>{const s=graph.sources[key];return `<span><i class="dot ${s?.ok===true?'ok':s?.ok===false?'failing':'unknown'}"></i>${key} · ${s?.ok===true?'正常':s?.ok===false?'無回應':'無資料'} · ${esc(number(s?.age_secs,' 秒前'))}</span>`;}).join('');
-  $('footer-status').textContent=`${source==='recording'?'錄影資料':'即時資料'} · ${state.run.id} · 快照 #${graph.seq}`;
+  $('footer-status').textContent=`${source==='recording'?'錄影資料':localMock?'本機模擬資料':'即時資料'} · ${state.run.id} · 快照 #${graph.seq}`;
 }
 function renderNode(){
  if(!state)return;
@@ -114,7 +116,7 @@ function scheduleRefresh(){if(refreshTimer)return;refreshTimer=setTimeout(()=>{r
 function reconnect(){stream?.close();stream=null;if(retryTimer)return;connection('disconnected · 正在重連','disconnected');retryTimer=setTimeout(()=>{retryTimer=null;connect();},retryDelay);retryDelay=Math.min(8000,retryDelay*2);}
 function connect(){
  const query=state?.run.id?`?cursor=${encodeURIComponent(state.run.id+':'+cursor)}`:'';
- stream=new EventSource('/events'+query);const current=stream;
+ stream=new EventSource(apiPath('/events'+query));const current=stream;
  const receive=handler=>event=>{if(stream!==current)return;lastActivity=Date.now();retryDelay=1000;connection('即時連線');try{handler(JSON.parse(event.data));error('stream');}catch(e){error('stream',`SSE 資料錯誤：${e.message}`);scheduleRefresh();}};
  current.addEventListener('state',receive(data=>{adopt(data);error('state');}));
  current.addEventListener('graph',receive(data=>{if(!state){scheduleRefresh();return;}validateGraph(data,state.capabilities);if(data.seq>state.graph_now.seq){state.graph_now=data;renderGraph();renderNode();}}));
@@ -133,7 +135,7 @@ $('zoom-out').onclick=()=>changeZoom(-.1);$('zoom-in').onclick=()=>changeZoom(.1
 $('replay-time').oninput=e=>showRecording(Number(e.target.value));
 window.addEventListener('hashchange',route);window.addEventListener('resize',()=>{if(autoFit&&!$('topology-view').hidden)renderGraph();});
 window.addEventListener('pagehide',()=>{stream?.close();clearTimeout(retryTimer);clearTimeout(refreshTimer);clearInterval(freshnessTimer);});
-async function start(){route();if(source==='recording'){$('recording').hidden=false;try{recording=await loadRecording();showRecording(60);if(selectedIncident)selectIncident(selectedIncident);}catch(e){error('recording',`錄影載入失敗：${e.message}`);connection('錄影載入失敗','disconnected');}}else{await refreshLive();connect();freshnessTimer=setInterval(()=>{const age=Date.now()-lastActivity;if(!lastActivity)return;if(age>=15000){connection('disconnected · 資料未更新','disconnected');reconnect();}else if(age>=6000)connection('stale · 資料延遲','stale');},1000);}}
+async function start(){localMock=await setupConnection(source);route();if(source==='recording'){$('recording').hidden=false;try{recording=await loadRecording();showRecording(60);if(selectedIncident)selectIncident(selectedIncident);}catch(e){error('recording',`錄影載入失敗：${e.message}`);connection('錄影載入失敗','disconnected');}}else{await refreshLive();connect();freshnessTimer=setInterval(()=>{const age=Date.now()-lastActivity;if(!lastActivity)return;if(age>=15000){connection('disconnected · 資料未更新','disconnected');reconnect();}else if(age>=6000)connection('stale · 資料延遲','stale');},1000);}}
 start().catch(e=>error('startup',e.message));
 
 function appendJournal(kind,data){
