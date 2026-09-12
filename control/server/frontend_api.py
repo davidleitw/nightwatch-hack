@@ -13,8 +13,9 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from frontend_mock import MockStore, timestamp
+from frontend_mock import MockStore
 from frontend_live import LiveStore
+from time_utils import timestamp
 
 
 LOG = logging.getLogger(__name__)
@@ -72,29 +73,16 @@ WRITE_ROUTES = {
 }
 
 
-def unavailable_readiness():
-    ids = ("prometheus_reachable", "jaeger_reachable", "logstore_receiving", "nodes_alive", "shopper_rate", "baseline", "model", "fault_clear")
-    return {"ready": False, "checks": [
-        {"id": key, "status": "failed" if key == "model" else "waiting",
-         "detail_zh": "尚未接入模型" if key == "model" else "尚未接入真實資料來源"} for key in ids],
-        "next_step_zh": "等待服務啟動"}
-
-
-def install_frontend(app, graph_provider, log_hub=None, *, live=False):
+def install_frontend(app, graph_provider, log_hub=None):
     flag = os.getenv("NIGHTWATCH_MOCK_DATA", "0")
     if flag not in ("0", "1"):
         raise ValueError("NIGHTWATCH_MOCK_DATA 只能是 0 或 1")
     mock_data = flag == "1"
-    store = MockStore(APIError, graph_provider) if mock_data else LiveStore(app, APIError) if live else None
+    store = MockStore(APIError, graph_provider) if mock_data else LiveStore(app, APIError)
     app.state.frontend_store = store
     headers = {"X-NightWatch-Mock": str(mock_data).lower(), "Cache-Control": "no-store"}
     if mock_data:
         LOG.warning("[MOCK DATA ENABLED] 前端 API 全部使用記憶體假資料；不會操作真實服務")
-
-    def required_store():
-        if store is None:
-            raise APIError(503, "internal", "真實後端尚未接入；沒有提供假資料或執行任何操作")
-        return store
 
     def response(data, status=200):
         return JSONResponse(data, status_code=status, headers=headers)
@@ -116,13 +104,11 @@ def install_frontend(app, graph_provider, log_hub=None, *, live=False):
                 raise APIError(400, "invalid_request", "limit 必須是 1–20000 的整數")
             if name == "health":
                 data = {"status": "ok"}
-            elif name == "readiness" and store is None:
-                data = unavailable_readiness()
             elif name in ("state", "readiness", "capabilities"):
-                state = required_store().stream_snapshot()[0]
+                state = store.stream_snapshot()[0]
                 data = state if name == "state" else state[name]
             else:
-                data = required_store().read(name, request.path_params, query)
+                data = store.read(name, request.path_params, query)
             return response(data)
         return endpoint
 
@@ -140,7 +126,7 @@ def install_frontend(app, graph_provider, log_hub=None, *, live=False):
                 body = model.model_validate_json(raw).model_dump(exclude_unset=True)
             except ValidationError:
                 raise APIError(400, "invalid_request", "JSON 欄位無效，請依 OpenAPI 提供 request_id 與必要欄位") from None
-            result = required_store().execute(name, request.path_params, body, request.url.path)
+            result = store.execute(name, request.path_params, body, request.url.path)
             return response(result, 202)
         return endpoint
 
@@ -229,24 +215,7 @@ def install_frontend(app, graph_provider, log_hub=None, *, live=False):
                     if queue is not None:
                         log_hub.subscribers.discard(queue)
             return StreamingResponse(live_stream(), media_type="text/event-stream", headers={**headers, "X-Accel-Buffering": "no"})
-        if store is None and log_hub is not None:
-            async def logs_only():
-                queue = log_hub.subscribe()
-                try:
-                    yield ": log-only; state backend unavailable\n\n"
-                    while not await request.is_disconnected():
-                        try:
-                            payload = await asyncio.wait_for(queue.get(), timeout=2)
-                        except asyncio.TimeoutError:
-                            yield "event: ping\ndata: {}\n\n"
-                            continue
-                        if payload is None:
-                            return
-                        yield "event: log\ndata: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
-                finally:
-                    log_hub.subscribers.discard(queue)
-            return StreamingResponse(logs_only(), media_type="text/event-stream", headers={**headers, "X-Accel-Buffering": "no"})
-        state, journal = required_store().stream_snapshot()
+        state, journal = store.stream_snapshot()
         revision = journal[-1]["revision"] if journal else 0
         if cursor:
             cursor_run, cursor_revision = cursor.rsplit(":", 1)

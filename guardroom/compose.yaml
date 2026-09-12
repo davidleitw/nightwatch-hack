@@ -1,0 +1,52 @@
+services:
+  guardroom:
+    build:
+      context: ..
+      dockerfile: guardroom/Dockerfile
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PORT:-9999}:9999"
+    environment:
+      GUARDROOM_CONFIG: /app/guardroom/shop-web.config.json
+      NIGHTWATCH_INVESTIGATION_DB: /app/guardroom/.run/investigations.sqlite3
+      NIGHTWATCH_GRAPH_URL: ${NIGHTWATCH_GRAPH_URL:-http://127.0.0.1:9999/api/graph}
+      NIGHTWATCH_MOCK_DATA: ${NIGHTWATCH_MOCK_DATA:-0}
+      NIGHTWATCH_LLM_API_KEY: ${NIGHTWATCH_LLM_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      NIGHTWATCH_LLM_MODEL: ${NIGHTWATCH_LLM_MODEL:-gpt-6-astra}
+      NIGHTWATCH_LLM_ENDPOINT: ${NIGHTWATCH_LLM_ENDPOINT:-https://api.openai.com/v1/responses}
+    volumes:
+      - type: bind
+        source: ${GUARDROOM_CONFIG:-./shop-web.config.json}
+        target: /app/guardroom/shop-web.config.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MONITOR_LOG_DIR:-../control/tmp}
+        target: /app/control/tmp
+        read_only: true
+        bind:
+          create_host_path: false
+      - guardroom-state:/app/guardroom/.run
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9999/health/ready', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  guardroom-state:

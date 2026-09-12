@@ -260,8 +260,8 @@ function activityHTML(id, terminal = false, sourceFilter = 'all') {
       return `<article class="journal-entry system"><div class="journal-meta"><strong>系統</strong><span>${esc(e.type)}</span><time>${esc(at(e.at))}</time></div>${raw(e.payload)}</article>`;
     }
     const end = row.finished, start = row.started;
-    const label = {running: '執行中', recorded: '已取得證據', failed: '工具失敗', incomplete: '調查已結束，未收到工具結果'}[row.status];
-    return `<article class="journal-entry agent"><div class="journal-meta"><strong>Agent 工具</strong><span>${esc(start?.payload.tool ?? end?.payload.tool ?? '未提供工具名稱')}</span></div><p class="${row.status === 'failed' || row.status === 'incomplete' ? 'failing' : ''}">${label}</p><p class="report-note">${esc(row.investigation_id)} / ${esc(row.call_id)}${start ? '' : ' · 未收到開始事件'}</p>${start ? `<details><summary>開始時間、參數與內容</summary><p>${esc(at(start.at))}</p>${raw(start.payload)}</details>` : ''}${end ? `<details open><summary>${row.status === 'failed' ? '失敗原因' : '證據 payload.evidence'}</summary>${row.status === 'recorded' && end.payload.evidence === undefined ? '<p class="failing">成功事件未提供 evidence。</p>' : raw(row.status === 'recorded' ? end.payload.evidence : end.payload)}</details>` : ''}</article>`;
+    const label = {running: '執行中', recorded: '已取得證據', reported: '已提交報告', failed: '工具失敗', incomplete: '調查已結束，未收到工具結果'}[row.status];
+    return `<article class="journal-entry agent"><div class="journal-meta"><strong>Agent 工具</strong><span>${esc(start?.payload.tool ?? end?.payload.tool ?? '未提供工具名稱')}</span></div><p class="${row.status === 'failed' || row.status === 'incomplete' ? 'failing' : ''}">${label}</p><p class="report-note">${esc(row.investigation_id)} / ${esc(row.call_id)}${start ? '' : ' · 未收到開始事件'}</p>${start ? `<details><summary>開始時間、參數與內容</summary><p>${esc(at(start.at))}</p>${raw(start.payload)}</details>` : ''}${end ? `<details open><summary>${row.status === 'failed' ? '失敗原因' : row.status === 'reported' ? '提交的報告' : '證據 payload.evidence'}</summary>${row.status === 'recorded' && end.payload.evidence === undefined ? '<p class="failing">成功事件未提供 evidence。</p>' : raw(row.status === 'recorded' ? end.payload.evidence : row.status === 'reported' ? end.payload.report : end.payload)}</details>` : ''}</article>`;
   }).join('') || '<div class="empty">尚未收到此調查的事件。</div>';
 }
 function renderUsage(usage) {
@@ -271,8 +271,9 @@ function renderUsage(usage) {
 function reportHTML(detail) {
   if (!detail) return '<p class="report-note">正在讀取調查詳情。</p>';
   const report = detail.report;
+  const agentReport = report?.investigation_report ?? report?.agent_report;
   if (!report) return `<p class="${detail.status === 'running' ? 'report-note' : 'failing'}">${detail.status === 'running' ? '調查尚未結束，報告尚未產生。' : '調查已結束，但後端未提供報告。'}</p>`;
-  return `<p class="detail-summary">${esc(report.summary_zh || '報告未提供摘要。')}</p><p>${esc(outcomeText[report.outcome] || report.outcome || '未提供結果')}</p><p class="report-note">${esc(at(report.started_at))} → ${esc(at(report.closed_at))}。調查完成不表示服務已恢復。</p><h3>限制</h3>${Array.isArray(report.limitations) && report.limitations.length ? `<ul>${report.limitations.map(item => `<li>${esc(item)}</li>`).join('')}</ul>` : '<p class="report-note">後端未列出限制。</p>'}<h3>Agent 報告</h3>${report.agent_report == null ? '<p class="report-note">未產生可採信的根因報告；此調查仍有保存結案摘要。</p>' : raw(report.agent_report)}<details><summary>證據與引用 ID</summary>${raw({evidence_ids: report.evidence_ids, evidence: detail.evidence})}</details>`;
+  return `<p class="detail-summary">${esc(report.summary_zh || '報告未提供摘要。')}</p><p>${esc(outcomeText[report.outcome] || report.outcome || '未提供結果')}</p><p class="report-note">${esc(at(report.started_at))} → ${esc(at(report.closed_at))}。調查完成不表示服務已恢復。</p><h3>限制</h3>${Array.isArray(report.limitations) && report.limitations.length ? `<ul>${report.limitations.map(item => `<li>${esc(item)}</li>`).join('')}</ul>` : '<p class="report-note">後端未列出限制。</p>'}<h3>Agent 報告</h3>${agentReport == null ? '<p class="report-note">未產生可採信的根因報告；此調查仍有保存結案摘要。</p>' : raw(agentReport)}<details><summary>證據與引用 ID</summary>${raw({evidence_ids: report.evidence_ids, evidence: detail.evidence})}</details>`;
 }
 function renderCurrent() {
   const id = activeId(), summary = activeSummary(), detail = id ? details.get(id) : null;
@@ -433,13 +434,13 @@ async function startInvestigation() {
 }
 function reconnect() {
   stream?.close(); stream = null;
-  if (disposed || streamRetry) return;
+  if (disposed || document.hidden || streamRetry) return;
   connection('調查連線中斷，正在重連', 'disconnected');
   streamRetry = setTimeout(() => { streamRetry = null; connect(); }, streamDelay);
   streamDelay = Math.min(8000, streamDelay * 2);
 }
 function connect() {
-  if (disposed) return;
+  if (disposed || document.hidden || stream) return;
   lastActivity = Date.now(); // Give each connection attempt its own timeout window.
   const requestedCursor = store.eventCursor;
   const events = new EventSource('/api/investigations/stream' + (requestedCursor === null ? '' : `?after=${requestedCursor}`));
@@ -469,13 +470,13 @@ function connect() {
 }
 function reconnectLogs() {
   logStream?.close(); logStream = null;
-  if (disposed || logRetry) return;
+  if (disposed || document.hidden || logRetry) return;
   error('monitor', 'Monitor log 連線中斷；調查串流仍獨立運作，重連不補送缺漏 log。');
   logRetry = setTimeout(() => { logRetry = null; connectLogs(); }, logDelay);
   logDelay = Math.min(8000, logDelay * 2);
 }
 function connectLogs() {
-  if (disposed) return;
+  if (disposed || document.hidden || logStream) return;
   lastLogActivity = Date.now();
   const events = new EventSource('/events'); logStream = events;
   const receive = handler => event => {
@@ -495,10 +496,29 @@ function connectLogs() {
   }));
   events.onerror = () => { if (logStream === events) reconnectLogs(); };
 }
+function pauseStreams() {
+  stream?.close(); logStream?.close(); stream = logStream = null;
+  clearTimeout(streamRetry); clearTimeout(logRetry); streamRetry = logRetry = null;
+}
+async function resumeWorkspace() {
+  if (disposed || document.hidden) return;
+  // Finish ordinary reads before reserving two HTTP connections for SSE.
+  await refresh();
+  if (disposed || document.hidden) return;
+  connect(); connectLogs();
+}
+function visibilityChanged() {
+  if (document.hidden) {
+    pauseStreams();
+    connection('背景分頁暫停即時連線');
+  } else {
+    void resumeWorkspace();
+  }
+}
 function dispose() {
-  disposed = true; stream?.close(); logStream?.close();
-  clearTimeout(streamRetry); clearTimeout(logRetry); clearInterval(heartbeatTimer);
+  disposed = true; pauseStreams(); clearInterval(heartbeatTimer);
   clearInterval(snapshotPoll); cancelSnapshot(); snapshotIndexController?.abort();
+  document.removeEventListener('visibilitychange', visibilityChanged);
 }
 
 export function startWorkspace() {
@@ -559,6 +579,7 @@ export function startWorkspace() {
   window.addEventListener('hashchange', route);
   window.addEventListener('resize', () => { if (fit) renderGraph(); });
   window.addEventListener('pagehide', dispose, {once: true});
+  document.addEventListener('visibilitychange', visibilityChanged);
   window.addEventListener('pageshow', event => { if (event.persisted) location.reload(); });
   lastActivity = lastLogActivity = Date.now();
   heartbeatTimer = setInterval(() => {
@@ -566,5 +587,5 @@ export function startWorkspace() {
     if (age >= 15000 && stream) reconnect(); else if (age >= 6000 && stream) connection('調查連線延遲', 'stale');
     if (Date.now() - lastLogActivity >= 15000 && logStream) reconnectLogs();
   }, 1000);
-  renderCurrent(); route(); connect(); connectLogs(); void refresh();
+  renderCurrent(); route(); void resumeWorkspace();
 }

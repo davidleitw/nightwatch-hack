@@ -26,10 +26,29 @@ class Invocation:
     started_at: str
     clock: float
     active: bool = True
+    result_error: str | None = None
 
 
 current_invocation: ContextVar[Invocation | None] = ContextVar("monitor_invocation", default=None)
+_remote_parent: ContextVar[str | None] = ContextVar("monitor_remote_parent", default=None)
 _emitting: ContextVar[bool] = ContextVar("monitor_emitting", default=False)
+
+
+def get_invocation_id() -> str | None:
+    invocation = current_invocation.get()
+    return invocation.id if invocation and invocation.active else None
+
+
+@contextmanager
+def invocation_context(parent_id: str | None):
+    """Carry a remote parent's opaque ID; malformed headers are ignored."""
+    valid = (isinstance(parent_id, str) and len(parent_id) == 32
+             and all(char in "0123456789abcdef" for char in parent_id))
+    token = _remote_parent.set(parent_id if valid else None)
+    try:
+        yield
+    finally:
+        _remote_parent.reset(token)
 
 
 class MonitorRuntime:
@@ -105,10 +124,10 @@ class MonitorRuntime:
             ))
 
     @contextmanager
-    def invocation(self, name: str, config: MonitorConfig):
+    def invocation(self, name: str, config: MonitorConfig, *, exception_is_error=None):
         parent = current_invocation.get()
         invocation = Invocation(self, config, name, uuid4().hex,
-                                parent.id if parent and parent.active else None, now(), perf_counter())
+                                parent.id if parent and parent.active else _remote_parent.get(), now(), perf_counter())
         token = current_invocation.set(invocation)
         state = MonitorState(name=name, status="running", started_at=invocation.started_at,
                              invocation_id=invocation.id, parent_invocation_id=invocation.parent_id)
@@ -119,15 +138,18 @@ class MonitorRuntime:
                                 invocation.parent_id, "INFO", "node started", status="running"))
         error = None
         trace = None
-        status = "ok"
+        exception_failed = False
         try:
-            yield
+            yield invocation
         except BaseException as exc:
-            status = "error"
-            error = f"{type(exc).__name__}: {exc}"
-            trace = "".join(traceback.format_exception(exc))
+            if exception_is_error is None or exception_is_error(exc):
+                exception_failed = True
+                error = f"{type(exc).__name__}: {exc}"
+                trace = "".join(traceback.format_exception(exc))
             raise
         finally:
+            error = error or invocation.result_error
+            status = "error" if error else "ok"
             duration = round((perf_counter() - invocation.clock) * 1000, 3)
             state = MonitorState(name, status, invocation.started_at, now(), duration,
                                  error, invocation.id, invocation.parent_id)
@@ -135,7 +157,7 @@ class MonitorRuntime:
                 self._active.pop(invocation.id, None)
                 self._states[name] = state
             self._emit(MonitorEvent(
-                uuid4().hex, state.finished_at, "exception" if error else "finished",
+                uuid4().hex, state.finished_at, "exception" if exception_failed else "finished",
                 name, invocation.id, invocation.parent_id, "ERROR" if error else "INFO",
                 "node failed" if error else "node finished", status=status,
                 traceback=trace, duration_ms=duration, error=error,

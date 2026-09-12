@@ -15,7 +15,8 @@ Monitor 不直接送出 p95 或 graph 的 warning／failing，兩者由 Guard Ro
 ```
 
 Shop-web 目前使用 JSONL 路徑，示範 monitor 為 `shop.health`、`shop.products`、
-`shop.db.query`；啟動與 graph config 見 [Guard Room README](../../guardroom/README.md)。
+`shop.db.query`，以及 `shop.checkout.request`、`shop.checkout.logic`、`shop.db.write`；
+啟動與 graph config 見 [Guard Room README](../../guardroom/README.md)。
 
 ```python
 import logging
@@ -41,6 +42,13 @@ detail = get_detail("payment")
 預設 config：name 使用函式 qualname、description 為空、level 為 INFO、capture_logs 為 True。
 `level` 只篩選收集的 logger output；生命週期與 exception 仍會記錄。
 
+可用 `exception_is_error(exc) -> bool` 排除預期的業務例外；回傳 False 時記錄
+`finished/status=ok`，例外仍原樣拋出。可用 `result_error(result) -> str | None`
+將回傳結果判為失敗（例如 HTTP 5xx）：回傳非空錯誤文字時記錄
+`finished/status=error`，回傳 None 時為成功，原函式回傳值不變。
+兩者都省略時維持預設：正常回傳為成功，未處理例外為失敗。分類函式應不拋例外，
+錯誤文字不要包含訂單姓名、地址等敏感參數。
+
 | 模組 | 責任 |
 | --- | --- |
 | `models.py` | config、state、event 與 EventSink 輸出介面 |
@@ -55,7 +63,7 @@ detail = get_detail("payment")
 | 事件 kind | 內容 | Guard Room 的用途 |
 | --- | --- | --- |
 | `started` | status=running、invocation ID、時間 | 代表窗口內有活動，不計完成次數 |
-| `finished` | status=ok、duration_ms | 計入完成次數與耗時樣本 |
+| `finished` | status=ok 或 result_error 判定的 error、duration_ms | 計入完成次數與耗時樣本；error 計入失敗 |
 | `exception` | status=error、duration_ms、error、traceback | 計入完成／失敗次數與耗時樣本 |
 | `log` | logger level、message，例外時帶 traceback | 調查資訊，不計完成／失敗次數與 p95 樣本 |
 
@@ -80,7 +88,13 @@ Monitor 的 UTC 事件時間保持原樣；Guard Room 新產生的 graph `at` �
 自行建立的 thread／process 不會自動傳遞。函式回傳後才發出的背景 log 不再歸屬該次呼叫。
 一般函式與 coroutine 皆支援；generator／async generator 會明確拒絕。
 
-ERROR log 不會把函式狀態改為 error；未處理 exception（含取消）才會記為 error，
+跨 HTTP 時可用 `get_invocation_id()` 取得當前 ID，再於接收端用
+`with invocation_context(parent_id):` 包住下游處理；僅接受 32 位小寫十六進位 ID，
+無效值忽略，離開 context 後還原。現有本地 invocation 優先作為 parent。
+Shop gateway 只傳自己產生的 ID 給 order，order 的 DB executor 以 `copy_context()`
+保留 logic 關聯。此機制只關聯 monitor 事件，不是完整分散式 tracing。
+
+ERROR log 不會把函式狀態改為 error；預設未處理 exception（含取消）會記為 error，
 保留 traceback 並原樣拋出。`logger.exception` 的已處理例外則保留在 log event 中。
 如同一次例外先 logging 再拋出，會有 log 與 exception 兩筆不同事件。
 不自動收集參數、回傳值、locals、任意 logging extra 或 print；log message 與 traceback
@@ -92,7 +106,7 @@ logger 本身過濾掉的訊息無法收集；`propagate=False` 的 logger 請�
 來源 logger 安裝 handler，不能等 QueueListener 的其他 thread 才關聯。
 
 Shop-web 在 startup 的 `configure_logging()` 之後呼叫 `install_logging(logger)`，
-三個 monitor 都設定 `level="WARNING"`。一般 logger 訊息只收 WARNING／ERROR／CRITICAL，
+Shop monitor 都設定 `level="WARNING"`。一般 logger 訊息只收 WARNING／ERROR／CRITICAL，
 但 INFO 等級的 started／finished 仍會產生，確保 graph 有正常呼叫的分母與耗時。
 這是沿用既有 handler 的過濾，無需在 Guard Room 再按 level 丟棄所有 INFO 事件。
 
@@ -103,8 +117,9 @@ Shop-web 在 startup 的 `configure_logging()` 之後呼叫 `install_logging(log
 | `latency.warning_ms`／`min_samples` | Guard Room config | graph 的 p95 warning 判定 |
 
 以上門檻各自作用；例如 LOG_LEVEL=ERROR 時，logger 不會產生 WARNING，monitor 無法補回。
-目前 shop-web 啟停與 request middleware 的既有 log 位於 monitor invocation 之外，
-不會被歸屬到這三個 monitor。應在受監控函式內有實際重試、降級或已處理例外時 logging；
+Shop-web 啟停及非結帳 request middleware 的 log 位於 monitor invocation 之外；
+結帳 middleware 的 WARNING／ERROR 則歸屬 checkout request。
+應在受監控函式內有實際重試、降級或已處理例外時 logging；
 未處理例外已由 monitor 記錄，不需為收集再記錄一次。
 
 ## 程序內狀態與 JSONL
@@ -116,8 +131,10 @@ Shop-web 在 startup 的 `configure_logging()` 之後呼叫 `install_logging(log
 
 預設 JSONL 路徑沿用 `control/tmp/monitor.jsonl`，時間改為 UTC RFC3339；
 每筆事件包含 event_id、node、invocation_id、kind、level、message 等欄位。
-歷史檔案的舊紀錄不會改寫，消費端須容許舊欄位。檔案不自動輪替；多程序部署應各用
-自己的 sink／檔案，不能依賴這個 thread lock 協調其他程序。
+歷史檔案的舊紀錄不會改寫，消費端須容許舊欄位。檔案不自動輪替。
+JSONL sink 使用 thread lock 與 POSIX `flock`，在 flush 完整事件後才解鎖，
+讓 gateway／order 可共用本機掛載檔案；需要支援 `flock` 的檔案系統與所有 writer 配合，
+不宣稱支援跨主機或 Windows。讀取端仍需等待完整換行才處理末筆事件。
 
 可注入 `MonitorRuntime(sinks=(custom_sink,), max_events=1000)` 到 decorator 的 `runtime=`。
 custom_sink 只需實作 `emit(event)`，runtime 不依賴檔案格式；輸出失敗會增加 sink_errors，
@@ -172,7 +189,7 @@ import logging
 from monitor import GuardRoomSink, GuardRoomSinkConfig, MonitorConfig, MonitorRuntime, monitor
 
 sink = GuardRoomSink(GuardRoomSinkConfig(
-    endpoint="http://127.0.0.1:8001/api/logs",
+    endpoint="http://127.0.0.1:9999/api/logs",
 )).start()
 runtime = MonitorRuntime(sinks=(sink,))
 
@@ -212,5 +229,11 @@ close 回傳 True 代表 worker 已結束，不保證所有事件送達，需搭
 目前 sender 使用記憶體 queue，無磁碟 spool／重啟重播。Guard Room HTTP 成功表示
 接收端已將事件與 live graph checkpoint 寫入檔案，不保證 console 已顯示或已產生歷史快照。
 Docker 裡的 127.0.0.1 是容器自己，endpoint 必須設定為該環境可達的 Guard Room 位址。
+HTTP sink 的預設 endpoint 已改為 `http://127.0.0.1:9999/api/logs`；
+舊程式若明確寫死 8001，需要同步修改，既有程序需重啟才會載入新的預設值。
+跨容器可使用共用 Docker network 上的 `http://guardroom:9999/api/logs`；
+使用 Docker Desktop 的 host gateway 時，可依環境設定 `http://host.docker.internal:9999/api/logs`，
+但須確認能連到 host 的 localhost 發布埠。不要把 host 的 127.0.0.1 當成容器間位址。
 Shop-web 預設透過 Compose 共用的 `control/tmp/monitor.jsonl` 讓 Guard Room 讀取，
-沒有自動啟用 HTTP sink；兩條來源共用 `(monitor_id, event_id)` 去重。
+沒有自動啟用 HTTP sink，因此不需要改 Shop monitor 的 port 或事件格式；
+兩條來源共用 `(monitor_id, event_id)` 去重。

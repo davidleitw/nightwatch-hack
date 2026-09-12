@@ -17,7 +17,7 @@ from .report import submit_definition
 async def run(args: argparse.Namespace) -> int:
     schema = json.loads(args.report_schema.read_text())
     if not args.fixture and not args.replay_model:
-        data = GraphAPI(args.graph_url or os.environ.get("NIGHTWATCH_GRAPH_URL", "http://127.0.0.1:8001/api/graph"), args.report_schema.parent)
+        data = GraphAPI(args.graph_url or os.environ.get("NIGHTWATCH_GRAPH_URL", "http://127.0.0.1:9999/api/graph"), args.report_schema.parent)
         await data.prepare()
         run_mode = "live_model_graph_api"
     else:
@@ -71,7 +71,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="NightWatch read-only agent: recorded observations or a graph API")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--fixture", type=Path, help="Explicitly investigate a recording instead of Guard Room")
-    source.add_argument("--graph-url", help="Guard Room graph URL; defaults to NIGHTWATCH_GRAPH_URL or http://127.0.0.1:8001/api/graph")
+    source.add_argument("--graph-url", help="Guard Room graph URL; defaults to NIGHTWATCH_GRAPH_URL or http://127.0.0.1:9999/api/graph")
     parser.add_argument("--report-schema", type=Path, default=Path("../contracts/schemas/agent-report.schema.json"))
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--replay-model", action="store_true", help="Replay recorded model calls offline; recording source only")

@@ -49,10 +49,11 @@ def connect(
     path: str | Path | None = None,
     *,
     timeout: float = 10,
+    factory: type[sqlite3.Connection] = sqlite3.Connection,
 ) -> Iterator[sqlite3.Connection]:
     db_path = Path(path) if path is not None else database_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(db_path, timeout=timeout)
+    db = sqlite3.connect(db_path, timeout=timeout, factory=factory)
     try:
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys = ON")

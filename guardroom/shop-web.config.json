@@ -16,10 +16,23 @@
       "kind": "service",
       "latency": {"warning_ms": 500, "min_samples": 20}
     },
-    {"monitor_id": "shop.db.query", "node_id": "shop-db", "kind": "datastore"}
+    {"monitor_id": "shop.db.query", "node_id": "shop-db", "kind": "datastore"},
+    {
+      "monitor_id": "shop.checkout.request", "node_id": "shop-checkout-request", "kind": "service",
+      "latency": {"warning_ms": 1000, "min_samples": 1}
+    },
+    {
+      "monitor_id": "shop.checkout.logic", "node_id": "shop-checkout-logic", "kind": "service",
+      "latency": {"warning_ms": 1000, "min_samples": 1}
+    },
+    {
+      "monitor_id": "shop.db.write", "node_id": "shop-db-write", "kind": "datastore",
+      "latency": {"warning_ms": 500, "min_samples": 1}
+    }
   ],
   "edges": [
     {"from": "shop.health", "to": "shop.db.query", "kind": "calls"},
-    {"from": "shop.products", "to": "shop.db.query", "kind": "calls"}
+    {"from": "shop.checkout.request", "to": "shop.checkout.logic", "kind": "calls"},
+    {"from": "shop.checkout.logic", "to": "shop.db.write", "kind": "uses"}
   ]
 }

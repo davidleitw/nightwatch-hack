@@ -52,6 +52,16 @@ The internal protocol is service-to-service only:
 
 The order service runs SQLite work in its own database executor, while outgoing business requests use a separate standard-library HTTP executor. Control requests used by reconciliation and fault controls use a separate short-timeout executor, so a slow business write does not occupy the control path.
 
+Checkout monitoring is shared through `app/monitoring.py`: the gateway records
+`shop.checkout.request`, the order coordinator records `shop.checkout.logic`, and
+checkout SQLite operations record `shop.db.write`. The order middleware's demo
+delay is outside the logic timer but included in the gateway request timer.
+The gateway supplies its own `X-Nightwatch-Parent-Invocation` header to order;
+the DB executor copies the context so each SQL event keeps its logic parent.
+HTTP 4xx are business rejections, HTTP 5xx are request failures, and successful
+rollback is not a DB failure. Monitor placement, graph thresholds, and shared
+JSONL delivery are documented in [Guard Room README](../../guardroom/README.md#結帳故障觀測).
+
 ## Demo fault controls
 
 `/api/demo-faults` is implemented by the order service and proxied by the gateway. GET, POST, and DELETE share this response shape:

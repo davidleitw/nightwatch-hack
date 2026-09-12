@@ -180,7 +180,7 @@ class InvestigationManager:
                  graph_url: str | None = None, limits: Limits | None = None):
         self.store = InvestigationStore(db_path)
         self.model_factory = model_factory or self._default_model
-        self.graph_url = graph_url or os.environ.get("NIGHTWATCH_GRAPH_URL", "http://127.0.0.1:8001/api/graph")
+        self.graph_url = graph_url or os.environ.get("NIGHTWATCH_GRAPH_URL", "http://127.0.0.1:9999/api/graph")
         self.graph_factory = graph_factory or (lambda: GraphAPI(self.graph_url, SCHEMAS))
         self.limits = limits or Limits()
         self.graph: Json | None = None

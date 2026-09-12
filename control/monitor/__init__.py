@@ -7,7 +7,7 @@ from threading import Lock
 
 from .adapters import JsonlSink, install_logging
 from .models import EventSink, MonitorConfig, MonitorEvent, MonitorState
-from .runtime import MonitorRuntime
+from .runtime import MonitorRuntime, get_invocation_id, invocation_context
 from .console import ConsoleLogSink, to_console_log
 from .guardroom import GuardRoomSink, GuardRoomSinkConfig
 
@@ -36,7 +36,8 @@ def get_detail(name: str) -> dict:
 
 
 def monitor(function=None, *, config: MonitorConfig | None = None,
-            name: str | None = None, runtime: MonitorRuntime | None = None):
+            name: str | None = None, runtime: MonitorRuntime | None = None,
+            exception_is_error=None, result_error=None):
     """Use @monitor, @monitor(), or @monitor(MonitorConfig(...))."""
     if isinstance(function, MonitorConfig):
         if config is not None:
@@ -44,6 +45,9 @@ def monitor(function=None, *, config: MonitorConfig | None = None,
         config, function = function, None
     if config is not None and not isinstance(config, MonitorConfig):
         raise TypeError("config must be a MonitorConfig")
+    for classifier in (exception_is_error, result_error):
+        if classifier is not None and not callable(classifier):
+            raise TypeError("monitor classifiers must be callable")
     config = config or MonitorConfig()
     if name is not None:
         config = replace(config, name=name)
@@ -62,14 +66,22 @@ def monitor(function=None, *, config: MonitorConfig | None = None,
         if inspect.iscoroutinefunction(target):
             @wraps(target)
             async def async_wrapper(*args, **kwargs):
-                with selected_runtime.invocation(node_name, effective_config):
-                    return await target(*args, **kwargs)
+                with selected_runtime.invocation(node_name, effective_config,
+                                                 exception_is_error=exception_is_error) as invocation:
+                    result = await target(*args, **kwargs)
+                    if result_error is not None:
+                        invocation.result_error = result_error(result)
+                    return result
             return async_wrapper
 
         @wraps(target)
         def wrapper(*args, **kwargs):
-            with selected_runtime.invocation(node_name, effective_config):
-                return target(*args, **kwargs)
+            with selected_runtime.invocation(node_name, effective_config,
+                                             exception_is_error=exception_is_error) as invocation:
+                result = target(*args, **kwargs)
+                if result_error is not None:
+                    invocation.result_error = result_error(result)
+                return result
         return wrapper
 
     return decorate(function) if function is not None else decorate
@@ -78,7 +90,7 @@ def monitor(function=None, *, config: MonitorConfig | None = None,
 __all__ = [
     "DEFAULT_SINK_PATH", "EventSink", "JsonlSink", "MonitorConfig", "MonitorEvent",
     "MonitorRuntime", "MonitorState", "configure_file_sink", "get_detail", "get_states",
-    "install_logging", "monitor",
+    "install_logging", "monitor", "get_invocation_id", "invocation_context",
     "ConsoleLogSink", "to_console_log",
     "GuardRoomSink", "GuardRoomSinkConfig",
 ]

@@ -3,7 +3,7 @@ from copy import deepcopy
 from datetime import datetime
 from uuid import uuid4
 
-from frontend_mock import timestamp
+from time_utils import timestamp
 
 
 def saved_snapshots(detail):

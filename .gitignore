@@ -40,3 +40,4 @@ build/
 .vscode/
 .DS_Store
 guardroom/.run/
+/.run/

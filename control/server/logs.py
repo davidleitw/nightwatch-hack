@@ -1,7 +1,7 @@
 """Console log validation, bounded deduplication and live fan-out."""
 import asyncio
 from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 from typing import Annotated, Literal
 
@@ -125,7 +125,8 @@ def create_log_router(hub: LogHub, *, include_events=True) -> APIRouter:
                     try:
                         payload = await asyncio.wait_for(queue.get(), timeout=2)
                     except asyncio.TimeoutError:
-                        yield "event: ping\ndata: {}\n\n"
+                        server_now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                        yield "event: ping\ndata: " + json.dumps({"server_now": server_now}) + "\n\n"
                         continue
                     if payload is None:
                         break

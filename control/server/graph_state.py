@@ -6,6 +6,7 @@ import logging
 import math
 import os
 from pathlib import Path
+from time import monotonic
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -180,6 +181,7 @@ class GraphStore:
         write_json_atomic(self.path, saved)
         self.recent, self.cursor, self.snapshot = recent, cursor, snapshot
         self.seq = snapshot["seq"]
+        self.last_commit_monotonic = monotonic()
         return fresh
 
     def read_file(self):
