@@ -135,6 +135,16 @@ model settings and framework messages. `complete:false` means the transcript is
 partial; it must not be presented as a complete model conversation. Contexts are
 independent and are not automatically copied into new investigations.
 
+Two additional read endpoints are available:
+
+- `GET /api/investigations/{id}/report` returns exactly the saved terminal report.
+  Running sessions return 409 `investigation_active`; unknown IDs return 404.
+- `GET /api/investigations/{id}/snapshots` returns
+  `{investigation_id, snapshots:[{evidence_id, snapshot}]}` in evidence order.
+  These are exact saved `get_graph` observations, including repeated queries.
+  Empty means no successful graph observation was saved; it does not prove that
+  the monitored service was healthy. Snapshots remain readable after ring expiry.
+
 Session lifecycle and conclusion are separate:
 
 | Status | Meaning |
@@ -150,10 +160,15 @@ An unresolved report is a valid archived investigation, not a missing report.
 
 ## Coexistence with existing APIs
 
-Existing `/api/graph`, `/api/state`, `/events` and legacy `/api/incidents/*` retain
-their existing behavior. This investigation flow uses the new namespace and does
-not require `NIGHTWATCH_MOCK_DATA=1`. The graph source itself is still synthetic
-until real monitoring is connected; the new session API does not change that fact.
+`/api/graph` retains its monitor behavior. `/api/state`, `/events` and legacy
+incident read APIs now project actual monitor observations and saved investigations
+without mock mode; see [FRONTEND-API.md](FRONTEND-API.md). Legacy incident lifecycle
+is a limited compatibility projection: completed investigations never imply recovered
+services. The original status/outcome, context and full saved report remain in this
+namespace. A complete legacy experiment report still requires injection truth,
+baseline, audit and verification data that are not connected.
 
-The client described here is the intended API consumer contract. Existing rendered
-frontend screens still need to be wired to these endpoints by their owner.
+The console workspace on master (#19) now consumes the native investigation API,
+including creation, history and saved reports. See
+[console integration](../console/GUARDROOM-INTEGRATION.md) for its connection contract.
+Browser end-to-end acceptance against this backend remains outstanding.

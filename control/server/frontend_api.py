@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from frontend_mock import MockStore, timestamp
+from frontend_live import LiveStore
 
 
 LOG = logging.getLogger(__name__)
@@ -79,12 +80,12 @@ def unavailable_readiness():
         "next_step_zh": "等待服務啟動"}
 
 
-def install_frontend(app, graph_provider, log_hub=None):
+def install_frontend(app, graph_provider, log_hub=None, *, live=False):
     flag = os.getenv("NIGHTWATCH_MOCK_DATA", "0")
     if flag not in ("0", "1"):
         raise ValueError("NIGHTWATCH_MOCK_DATA 只能是 0 或 1")
     mock_data = flag == "1"
-    store = MockStore(APIError, graph_provider) if mock_data else None
+    store = MockStore(APIError, graph_provider) if mock_data else LiveStore(app, APIError) if live else None
     app.state.frontend_store = store
     headers = {"X-NightWatch-Mock": str(mock_data).lower(), "Cache-Control": "no-store"}
     if mock_data:
@@ -179,6 +180,55 @@ def install_frontend(app, graph_provider, log_hub=None):
         cursor = query.get("cursor", request.headers.get("last-event-id"))
         if cursor is not None and not re.fullmatch(r"[^:]+:[0-9]+", cursor):
             raise APIError(400, "invalid_request", "cursor 必須是 <run_id>:<revision>")
+        if isinstance(store, LiveStore):
+            state = store.state()
+            high = store.investigations.cursor()
+            after = high
+            if cursor:
+                cursor_run, value = cursor.rsplit(":", 1)
+                if cursor_run == state["run"]["id"]:
+                    if int(value) > high:
+                        raise APIError(400, "invalid_request", "cursor 超過目前事件版本")
+                    after = int(value)
+
+            def live_frame(name, data):
+                event_id = f"id: {data['run_id']}:{data['revision']}\n" if name == "incident" else ""
+                return f"{event_id}event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+            async def live_stream():
+                queue = log_hub.subscribe() if log_hub is not None else None
+                try:
+                    yield live_frame("state", state)
+                    yield live_frame("graph", state["graph_now"])
+                    last_cursor, last_high = after, high
+                    graph_seq = state["graph_now"]["seq"]
+                    ping_at = time.monotonic() + 2
+                    while not await request.is_disconnected():
+                        if queue is not None:
+                            while not queue.empty():
+                                payload = queue.get_nowait()
+                                if payload is None:
+                                    return
+                                yield live_frame("log", payload)
+                        current_high = store.investigations.cursor()
+                        if current_high != last_high:
+                            yield live_frame("state", store.state())
+                            last_high = current_high
+                        for commit in store.commits_after(last_cursor):
+                            yield live_frame("incident", commit)
+                            last_cursor = commit["revision"]
+                        graph = store.graph_store.snapshot
+                        if graph["seq"] != graph_seq:
+                            yield live_frame("graph", graph)
+                            graph_seq = graph["seq"]
+                        if time.monotonic() >= ping_at:
+                            yield live_frame("ping", {"server_now": timestamp()})
+                            ping_at = time.monotonic() + 2
+                        await asyncio.sleep(0.2)
+                finally:
+                    if queue is not None:
+                        log_hub.subscribers.discard(queue)
+            return StreamingResponse(live_stream(), media_type="text/event-stream", headers={**headers, "X-Accel-Buffering": "no"})
         if store is None and log_hub is not None:
             async def logs_only():
                 queue = log_hub.subscribe()
@@ -270,7 +320,7 @@ def install_frontend(app, graph_provider, log_hub=None):
     def openapi():
         if app.openapi_schema is None:
             document = get_openapi(title=app.title, version=app.version, routes=app.routes,
-                                  description="Graph 維持既有 dummy API。舊版事故與操作介面以 NIGHTWATCH_MOCK_DATA=1 啟用假資料，新的 persistent investigation API 使用獨立的 SQLite session store；X-NightWatch-Mock 回應標頭標示舊版模式。")
+                                  description="Monitor graph 與 SQLite 調查提供真實唯讀前端 API；故障控制與完整實驗稽核尚未接入。NIGHTWATCH_MOCK_DATA=1 明確啟用舊版模擬操作。")
             definitions = document.setdefault("components", {}).setdefault("schemas", {})
             for name in ("state", "readiness", "snapshot", "node", "edge", "faults", "fault-catalog", "report", "timeline", "agent-report", "incident-commit"):
                 definitions[name] = convert(json.loads((SCHEMAS / f"{name}.schema.json").read_text()))
