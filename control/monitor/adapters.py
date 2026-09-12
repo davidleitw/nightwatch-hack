@@ -1,6 +1,7 @@
 """Standard logging input and JSONL output adapters."""
 from dataclasses import asdict
 from datetime import datetime, timezone
+import fcntl
 import json
 import logging
 from pathlib import Path
@@ -21,7 +22,13 @@ class JsonlSink:
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as stream:
-                stream.write(line)
+                # Gateway and order share this file across processes/containers.
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+                try:
+                    stream.write(line)
+                    stream.flush()
+                finally:
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
 class MonitorLogHandler(logging.Handler):

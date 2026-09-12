@@ -33,8 +33,9 @@ p95／errors／traffic／status。Logger 擷取與輸出方式見
 6. **持久化**：snapshot、近期最多 10000 筆事件、讀取位置一起寫暫存檔，
    flush／fsync 後 atomic replace；成功才更新記憶體並廣播 SSE log。
    每秒更新窗口，即使沒有新事件也會讓舊觀測過期，seq 每次提交遞增。
-7. **讀 graph**：`GET /api/graph` 回傳已提交 snapshot；
-   `GET /events` 提供 live log SSE。本階段尚未串接 `/api/state`、SSE graph 或 console 畫面。
+7. **讀 graph**：`GET /api/graph` 回傳已提交 snapshot；Console 透過
+   `/api/state` 與 `/events` 取得 live 狀態、graph 及 log，端點說明見
+   [Server README](../control/server/README.md)。
 
 Edge **只來自 config**，不從 parent invocation 推測。尚無 edge 量測，
 rps／errors／p95_ms=null、observed=false。saturation／trend 分別為 null／na。
@@ -49,13 +50,51 @@ logstore age 使用最新已知 monitor 的事件時間；Prometheus／Jaeger �
 
 ```text
 shop.health   → shop.db.query
-shop.products → shop.db.query
+shop.products（gateway → catalog）
+shop.checkout.request → shop.checkout.logic → shop.db.write
 ```
 
-分別掛在 `health()`、`products()`、共用 `_query()`；
-本次只讓 health 與商品列表的 SQL 走該 helper。沿用 monitor JSONL sink 與
+Gateway 的 `health()`、`products()` 觀測探活與商品列表；order 的
+`OrderStore._health_sync()` 以 `shop.db.query` 觀測 order DB 讀取。
+商品列表已改由 catalog 提供，不再連到 order DB query 節點。結帳另有下述三層。
+沿用 monitor JSONL sink 與
 Compose 的 `control/tmp/monitor.jsonl` 共用掛載，無需額外 HTTP bridge。
 monitor 不需要填 node_ids，由 Guard Room config 映射。
+
+### 結帳故障觀測
+
+`POST /api/orders` 與 `POST /api/carts/{cart_id}/checkout` 共用以下 monitor：
+
+| Monitor | 範圍 | latency warning（min_samples=1） |
+| --- | --- | --- |
+| `shop.checkout.request` | gateway middleware，包含等待 order 的時間與 HTTP 回應狀態 | 1000ms |
+| `shop.checkout.logic` | order 的 `OrderService._checkout()`，包含 catalog／cart 呼叫、重試與補償 | 1000ms |
+| `shop.db.write` | 結帳期間 order SQLite 的 `BEGIN IMMEDIATE`、寫入 SQL、commit／rollback | 500ms |
+
+故障延遲在 order middleware 執行，位於 logic monitor 外層，因此 10 秒等待只計入
+gateway request。Gateway 以內部 `X-Nightwatch-Parent-Invocation` header 傳遞自己產生的
+invocation ID；order 接收後讓 logic 關聯到 request，再用 `copy_context()` 將關聯帶進
+DB executor。此 header 不採用外部使用者提供的值，也不作為授權或去重依據。
+
+啟用故障後，需送出有效結帳請求。以下為窗口內只有該次結帳觀測時的結果：
+
+| 故障 | Request | Logic | DB write |
+| --- | --- | --- | --- |
+| 10 秒延遲 | warning（耗時超標，errors=0） | ok | ok |
+| 結帳例外 | failing | failing | ok（成功 rollback） |
+| DB 寫入鎖逾時 | failing | failing | failing |
+
+若窗口混有成功與失敗，對應節點為 warning；故障解除後，舊事件仍保留到 60 秒窗口過期。
+新版故障卡不會自動到期，演練後需 `DELETE /api/demo-faults` 手動解除。
+預期的 HTTP 4xx（空購物車、商品不存在、驗證失敗）不計服務失敗；
+正常回傳的 HTTP 5xx 也會計入 request 失敗，不必有未處理例外。
+業務例外不計為 DB 失敗；SQLite 本身的寫入、commit 或 rollback 例外才計入。
+DB write 的 traffic／p95 以單次 DB 操作為單位，一次結帳可產生多筆樣本，並非訂單數。
+DB write 不含 catalog／cart DB、啟動遷移或背景 reconcile。購物車結帳是跨服務補償，
+不是單一 DB transaction；失敗時還需確認 cart reservation 釋放，並以同一
+`Idempotency-Key` 驗證重試不重複建單。訂單提交後的 cart complete 失敗會記為 logic／
+request 失敗，order DB 仍可為 ok。
+購物車／商品 CRUD 尚未納入這三個結帳 monitor。
 
 ### 每個 monitor 的 latency warning
 
@@ -106,20 +145,22 @@ Started 和一般 logger 訊息不計入樣本數；沒有完成事件仍為 unk
 
 同樣耗時但只有 19 筆有效樣本時，status 仍為 ok；這不代表延遲已被充分驗證。
 Monitor 的單次 status=ok 不受影響，因為函式執行結果與窗口健康判定分開處理。
-P95 使用完成事件的函式耗時，不是 HTTP middleware 的 request duration，也不是 edge 延遲。
+P95 使用各 monitor 完成事件的耗時；checkout request 包含 middleware 等待，
+logic／DB 則各自量測內層執行時間，均不是 edge 延遲或完整網路往返時間。
 
 ### Shop logger
 
-Shop 啟動時將 monitor handler 掛到 `shop` logger。三個 monitor 的 `level="WARNING"`
+Shop gateway／order 啟動時將 monitor handler 掛到 `shop` logger。Monitor 的 `level="WARNING"`
 只收執行期間的 WARNING／ERROR／CRITICAL logger 訊息；DEBUG／INFO 不進 monitor，
 應用程式的 stdout 和 `/logs/app.log` 仍依原本 `LOG_LEVEL` 設定輸出。
 Logger 本身先過濾掉的訊息無法由 monitor 補回，例如 `LOG_LEVEL=ERROR` 會略過 WARNING。
 `started`／`finished`／`exception` 生命週期事件全部保留，不受此門檻影響。
 
 函式內的 warning／已處理例外可作為調查資訊；巢狀呼叫的 log 歸屬最內層 monitor。
-目前這三個函式沒有額外的業務 logger 呼叫，新增實際異常處理時可在函式內記錄。
+Order 的結帳與補償錯誤會歸屬當時的 logic invocation。
 未處理例外已由 monitor 自動捕捉，不需再記錄一次相同 exception。
-啟停與 request middleware 的既有 log 不在 monitor invocation 內，仍只寫應用日誌。
+啟停與非結帳 request middleware 的既有 log 不在 monitor invocation 內，仍只寫應用日誌；
+Gateway 結帳 middleware 的 WARNING／ERROR 會歸屬 checkout request。
 
 ### 啟動與觀察
 
@@ -134,7 +175,8 @@ curl http://127.0.0.1:8000/api/products
 curl http://127.0.0.1:9999/api/graph
 ```
 
-應有 shop-health、shop-products、shop-db 三個節點和兩條 edge。
+應有 shop-health、shop-products、shop-db、shop-checkout-request、shop-checkout-logic、
+shop-db-write 六個節點和三條 edge；尚未呼叫結帳時，其三個節點為 unknown。
 首次啟動從 log 開頭讀，舊資料多時需數個週期追上。上述單次 curl 只驗證資料流，
 不會累積到商品列表 latency warning 所需的 20 筆，也不保證耗時超過門檻。
 Shop backend 的 port 由 shop-web 設定，上例使用其預設 8000；若已設成 8001，
@@ -303,5 +345,7 @@ copytruncate 在兩次輪詢間縮短又長過原 offset 不保證偵測，建�
 成功代表 checkpoint 已寫入；超過去重容量的舊事件可能再次接受。
 
 `GET /events` 先送連線註解，新 log 送 event: log，閒置每 2 秒 ping。
+Ping data 為 `{"server_now":"<RFC3339 UTC 時間>"}`，代表送出心跳的時間，
+僅表示串流連線活動，不表示 graph 有新觀測；graph 的 `at` 仍使用台灣時間。
 每個訂閱者最多 256 筆，落後會斷線；無 SSE id、歷史回放或補送。
 API 無身分驗證，預設僅綁定 localhost。文件：`http://127.0.0.1:9999/docs`。

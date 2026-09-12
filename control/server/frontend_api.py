@@ -238,7 +238,7 @@ def install_frontend(app, graph_provider, log_hub=None, *, live=False):
                         try:
                             payload = await asyncio.wait_for(queue.get(), timeout=2)
                         except asyncio.TimeoutError:
-                            yield "event: ping\ndata: {}\n\n"
+                            yield "event: ping\ndata: " + json.dumps({"server_now": timestamp()}) + "\n\n"
                             continue
                         if payload is None:
                             return

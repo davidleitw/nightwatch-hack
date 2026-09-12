@@ -3,7 +3,7 @@ import {validateGraph} from './data.js';
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const integer = value => Number.isSafeInteger(value) && value >= 0;
 const statuses = ['running', 'completed', 'failed', 'interrupted'];
-const types = ['investigation.started', 'tool.started', 'observation.recorded', 'tool.failed', 'investigation.finished'];
+const types = ['investigation.started', 'tool.started', 'observation.recorded', 'tool.failed', 'report.submitted', 'investigation.finished'];
 
 // Layout is a local view choice. It is not added to the backend graph payload.
 export function graphLayout(graph) {
@@ -34,7 +34,8 @@ export function validateInvestigationState(value) {
 }
 export function validateInvestigationEvent(value) {
   if (!object(value) || typeof value.investigation_id !== 'string' || !value.investigation_id || !integer(value.seq) || value.seq < 1 || !integer(value.cursor) || !types.includes(value.type) || !Number.isFinite(Date.parse(value.at)) || !object(value.payload)) throw new Error('調查事件格式不符。');
-  if (['tool.started', 'observation.recorded', 'tool.failed'].includes(value.type) && (typeof value.payload.call_id !== 'string' || !value.payload.call_id)) throw new Error('工具事件缺少 payload.call_id，無法配對。');
+  if (['tool.started', 'observation.recorded', 'tool.failed', 'report.submitted'].includes(value.type) && (typeof value.payload.call_id !== 'string' || !value.payload.call_id)) throw new Error('工具事件缺少 payload.call_id，無法配對。');
+  if (value.type === 'report.submitted' && (value.payload.tool !== 'submit_report' || !object(value.payload.report))) throw new Error('報告事件缺少 submit_report 或合法 report。');
   return value;
 }
 export async function requestJSON(path, options = {}) {
@@ -86,7 +87,7 @@ export class InvestigationStore {
 export function pairedActivity(events, terminal = false) {
   const rows = [], calls = new Map();
   for (const event of events) {
-    if (['tool.started', 'observation.recorded', 'tool.failed'].includes(event.type)) {
+    if (['tool.started', 'observation.recorded', 'tool.failed', 'report.submitted'].includes(event.type)) {
       const key = JSON.stringify([event.investigation_id, event.payload.call_id]);
       let row = calls.get(key);
       if (!row) { row = {kind: 'tool', investigation_id: event.investigation_id, call_id: event.payload.call_id, seq: event.seq}; calls.set(key, row); rows.push(row); }
@@ -94,6 +95,6 @@ export function pairedActivity(events, terminal = false) {
       else row.finished = event;
     } else rows.push({kind: 'event', event, seq: event.seq});
   }
-  for (const row of calls.values()) row.status = row.finished ? (row.finished.type === 'tool.failed' ? 'failed' : 'recorded') : terminal ? 'incomplete' : 'running';
+  for (const row of calls.values()) row.status = row.finished ? (row.finished.type === 'tool.failed' ? 'failed' : row.finished.type === 'report.submitted' ? 'reported' : 'recorded') : terminal ? 'incomplete' : 'running';
   return rows.sort((a, b) => a.seq - b.seq);
 }

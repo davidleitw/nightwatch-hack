@@ -8,6 +8,7 @@ import os
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from contextvars import copy_context
 from dataclasses import dataclass
 from functools import partial
 from time import perf_counter
@@ -17,7 +18,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Path as ApiPath, Request, Response
-from monitor import MonitorConfig, install_logging, monitor
+from monitor import MonitorConfig, install_logging, invocation_context, monitor
 
 from .common import (
     CartOperationRequest,
@@ -30,7 +31,6 @@ from .common import (
     DemoFaultsResponse,
     OrderResponse,
     ShippingDetails,
-    connect,
     connect_legacy_readonly,
     legacy_table_exists,
     request_fingerprint,
@@ -48,6 +48,7 @@ from .http_client import (
     shutdown_http_clients,
 )
 from .logging_config import configure_logging, logger, shutdown_logging
+from .monitoring import CHECKOUT_LOGIC_MONITOR, PARENT_HEADER, connect, exception_is_system_error
 
 
 DEFAULT_ORDER_DB_PATH = "/data/order.db"
@@ -203,7 +204,8 @@ class OrderStore:
         if self._closed:
             raise RuntimeError("order store is closed")
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, partial(function, *args))
+        context = copy_context()
+        return await loop.run_in_executor(self._executor, partial(context.run, function, *args))
 
     async def start(self) -> None:
         self.path = str(self._path_provider())
@@ -273,6 +275,7 @@ class OrderStore:
                 )
 
     @staticmethod
+    @monitor(MonitorConfig(name="shop order database query", monitor_id="shop.db.query", level="WARNING"))
     def _health_sync(path: str) -> None:
         with connect(path) as db:
             db.execute("SELECT 1 FROM orders LIMIT 1").fetchone()
@@ -1074,6 +1077,7 @@ class OrderService:
             },
         )
 
+    @monitor(CHECKOUT_LOGIC_MONITOR, exception_is_error=exception_is_system_error)
     async def _checkout(
         self,
         *,
@@ -1293,6 +1297,11 @@ def _is_checkout_request(method: str, path: str) -> bool:
 
 @order_app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
+    with invocation_context(request.headers.get(PARENT_HEADER)):
+        return await _logged_request(request, call_next)
+
+
+async def _logged_request(request: Request, call_next):
     started_at = perf_counter()
     path = _safe_path(request)
     status_code = 500

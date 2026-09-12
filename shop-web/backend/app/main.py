@@ -7,7 +7,7 @@ from time import perf_counter
 from urllib.parse import quote
 
 from fastapi import FastAPI, Header, HTTPException, Path as ApiPath, Request, Response
-from monitor import MonitorConfig, install_logging, monitor
+from monitor import MonitorConfig, get_invocation_id, install_logging, monitor
 
 from .common import (
     CartItemInput,
@@ -31,6 +31,10 @@ from .http_client import (
     shutdown_http_clients,
 )
 from .logging_config import configure_logging, logger, shutdown_logging
+from .monitoring import (
+    CHECKOUT_REQUEST_MONITOR, PARENT_HEADER, exception_is_system_error,
+    http_result_error, is_checkout_request,
+)
 
 
 CATALOG_URL_ENV = "CATALOG_URL"
@@ -61,6 +65,10 @@ async def _proxy(
     timeout_kind: str = "business",
     dependency: str,
 ) -> Response:
+    if dependency == "order" and is_checkout_request(method, path):
+        parent_id = get_invocation_id()
+        if parent_id:
+            headers = {**(headers or {}), PARENT_HEADER: parent_id}
     try:
         downstream = await request_json(
             base_url,
@@ -123,6 +131,18 @@ def _safe_path(request: Request) -> str:
 
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
+    if is_checkout_request(request.method, request.url.path):
+        return await _monitored_checkout_request(request, call_next)
+    return await _logged_request(request, call_next)
+
+
+@monitor(CHECKOUT_REQUEST_MONITOR, exception_is_error=exception_is_system_error,
+         result_error=http_result_error)
+async def _monitored_checkout_request(request: Request, call_next):
+    return await _logged_request(request, call_next)
+
+
+async def _logged_request(request: Request, call_next):
     started_at = perf_counter()
     path = _safe_path(request)
     status_code = 500

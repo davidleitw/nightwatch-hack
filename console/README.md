@@ -2,6 +2,12 @@
 
 即時頁面現在使用 `/api/investigations/state` 與 `/api/investigations/stream`，支援開始調查、工具配對、歷史報告及保存上下文。Monitor log 獨立訂閱 `/events`。接線、實機驗收與目前未驗證項目見 [Guard Room／調查 API 接線文件](GUARDROOM-INTEGRATION.md)。下方舊事故契約說明只適用錄影及明確的本機 mock。
 
+調查事件支援 `report.submitted`，與 `submit_report` 的開始事件配對為「已提交報告」；
+結案仍以 `investigation.finished` 與 state 為準。報告優先讀取新版
+`investigation_report`，舊資料仍支援 `agent_report`。
+背景分頁會關閉兩條 SSE，避免多個分頁占滿 HTTP 連線而讓列表／事件 API 排隊逾時。
+切回時先更新狀態與歷史，再依原 cursor 重連調查串流；Monitor log 不回補背景期間的缺漏。
+
 原始碼在 `src/`，以原生瀏覽器 ES modules、CSS、SVG 實作。Python 標準函式庫將原始碼與契約錄影複製成可部署的 `dist/`，沒有第三方套件、CDN 或執行期建置依賴。`dist/` 是 Git 忽略的產物；請勿直接修改其中的檔案。
 
 ## 建置與啟動
