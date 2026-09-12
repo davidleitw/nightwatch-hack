@@ -56,6 +56,7 @@ function acceptState(value, options = {}) {
     if (previous !== activeId() || !details.has(activeId())) void loadDetail(activeId(), false);
   }
   if (previous !== activeId()) void loadHistory();
+  renderUsagePage();
 }
 
 function renderGraph() {
@@ -131,6 +132,48 @@ function renderUsage(usage) {
   const u = readUsage(usage);
   $('agent-usage').innerHTML = `<div class="usage-heading"><h3>Agent 用量</h3><span>${usage == null ? '尚未回報' : '後端累計'}</span></div><div class="usage-primary"><div><span class="metric-label">總 token</span><strong>${number(u.total)}</strong></div><div><span class="metric-label">快取命中率</span><strong>${number(u.rate, '%', 100)}</strong></div></div>${u.problems.length ? `<p class="failing">${esc(u.problems.join(' '))}</p>` : ''}<details><summary>後端用量原始值</summary>${raw(usage)}</details>`;
 }
+function usageId() { return activeId() || store.state?.last_completed_investigation_id; }
+function renderUsagePage() {
+  const view = $('usage-view');
+  if (view.hidden) return;
+  const id = usageId(), detail = details.get(id), usage = detail?.usage;
+  const cached = usage?.cache_read_tokens !== undefined ? usage.cache_read_tokens : usage?.cached_tokens;
+  const calls = usage?.requests !== undefined ? usage.requests : usage?.calls;
+  const u = readUsage(usage && typeof usage === 'object' && !Array.isArray(usage) ? {...usage, cached_tokens: cached, calls} : usage);
+  const problems = u.problems.map(message => message.replaceAll('cached_tokens', usage?.cache_read_tokens !== undefined ? 'cache_read_tokens' : 'cached_tokens').replaceAll('calls', usage?.requests !== undefined ? 'requests' : 'calls'));
+  const extra = key => {
+    const value = usage?.[key];
+    if (value === undefined) return null;
+    if (!Number.isSafeInteger(value) || value < 0) { problems.push(`${key} 必須是非負安全整數。`); return null; }
+    return value;
+  };
+  const writes = extra('cache_write_tokens'), tools = extra('tool_calls');
+  const reported = [u.input_tokens, u.output_tokens, u.cached_tokens, u.calls, writes, tools].some(value => value !== null);
+  const stateLabel = !store.state ? '等待調查狀態' : !id ? '尚無調查' : !detail ? '尚未取得用量' : problems.length ? '資料異常' : reported ? '已回報' : '尚未回報';
+  const expanded = view.querySelector('details')?.open;
+  const trend = (title, unit) => `<article class="usage-view-chart"><div class="usage-view-chart-heading"><h2>${title}</h2><span>${unit}</span></div><div class="usage-view-chart-empty"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true"><path d="M4 4v16h16"/><circle cx="14" cy="10" r="5"/><path d="M14 7v3l2 1"/></svg><strong>尚無趨勢資料</strong><p>目前只有調查累計值，尚無各時間點的用量。</p></div></article>`;
+  view.innerHTML = `<div class="usage-view-context"><div><span class="usage-view-kicker">${activeId() ? '進行中的調查' : '最近一次調查'}</span><p>${id ? esc(id) : '開始調查後，這裡會顯示 Agent 的用量。'}</p></div><div class="usage-view-context-actions"><span class="usage-view-status ${problems.length ? 'usage-view-invalid' : ''}">${stateLabel}</span>${id ? `<a href="#investigations/${encodeURIComponent(id)}">查看調查 →</a>` : ''}<a href="#topology">返回服務拓樸 →</a></div></div>
+    <div class="usage-view-metrics">
+      <article><h2>總 token</h2><strong>${number(u.total)}</strong><p>輸入 + 輸出</p></article>
+      <article><h2>Prompt cache 命中率</h2><strong>${number(u.rate, '%', 100)}</strong><p>${u.input_tokens === 0 ? '尚無輸入，命中率不適用' : '快取讀取 / 全部輸入'}</p><div class="usage-view-meter" ${u.rate === null ? 'aria-hidden="true"' : `role="meter" aria-label="Prompt cache 命中率" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${u.rate * 100}"`}><span style="width:${u.rate === null ? 0 : u.rate * 100}%"></span></div></article>
+      <article><h2>模型請求</h2><strong>${number(u.calls)} <small>次</small></strong><p>本次調查的模型請求數</p></article>
+      <article><h2>工具呼叫</h2><strong>${number(tools)} <small>次</small></strong><p>本次調查的工具呼叫數</p></article>
+    </div>
+    ${problems.length ? `<p class="usage-view-error" role="alert">${esc(problems.join(' '))}</p>` : !reported ? '<p class="usage-view-note">尚未取得用量數字；「—」不代表 0。若讀取失敗，請查看上方錯誤並按「更新資料」。</p>' : ''}
+    <div class="usage-view-section-title"><h2>用量趨勢</h2><span>本次調查</span></div><div class="usage-view-charts">${trend('Token 使用量', 'tokens')}${trend('Prompt cache 命中率', '%')}</div>
+    <section class="usage-view-breakdown"><div class="usage-view-section-title"><h2>Token 明細</h2><span>後端累計</span></div><dl><div><dt>輸入 token</dt><dd>${number(u.input_tokens)}</dd></div><div><dt>輸出 token</dt><dd>${number(u.output_tokens)}</dd></div><div><dt>其中快取讀取</dt><dd>${number(u.cached_tokens)}</dd></div><div><dt>快取寫入</dt><dd>${number(writes)}</dd></div></dl><p class="usage-view-note">快取讀取包含於輸入，總量不重複加總。命中率代表輸入 token 的快取比例，與回答正確率無關。</p></section>
+    <details class="usage-view-raw" ${expanded ? 'open' : ''}><summary>統計口徑與原始值</summary><p>範圍為上方這次調查，不代表帳號總用量。總 token = input_tokens + output_tokens。Prompt cache 命中率 = 快取讀取 ÷ input_tokens × 100%。未回報欄位顯示「—」，實際回報 0 才顯示 0。</p><p>數字以最近一次取得的調查詳情為準，可按「更新資料」重新讀取。</p>${raw(usage)}</details>`;
+}
+let usageLoadingId = null;
+async function loadUsagePage() {
+  if ($('usage-view').hidden) return;
+  renderUsagePage();
+  const id = usageId();
+  if (!id || id === usageLoadingId) return;
+  usageLoadingId = id;
+  try { await loadDetail(id, false); }
+  finally { if (usageLoadingId === id) usageLoadingId = null; }
+}
 function reportHTML(detail) {
   if (!detail) return '<p class="report-note">正在讀取調查詳情。</p>';
   const report = detail.report;
@@ -187,6 +230,7 @@ async function loadDetail(id, historical = true) {
     const previous = details.get(id);
     if (!previous || detail.event_seq >= previous.event_seq) details.set(id, detail);
     error(`detail:${id}`); renderCurrent();
+    renderUsagePage();
     if (historical || id === selectedHistory) renderDetail();
   } catch (e) { error(`detail:${id}`, `調查 ${id} 詳情讀取失敗：${e.message}`); renderDetail(); }
 }
@@ -245,11 +289,15 @@ async function loadContext(id) {
 function route() {
   const parts = location.hash.slice(1).split('/');
   const list = parts[0] === 'investigations' || parts[0] === 'incidents';
-  $('topology-view').hidden = list; $('incidents-view').hidden = !list;
-  $('nav-topology').setAttribute('aria-current', list ? 'false' : 'page');
+  const usage = parts[0] === 'usage';
+  $('topology-view').hidden = list || usage; $('incidents-view').hidden = !list;
+  $('usage-view').hidden = !usage;
+  document.querySelector('.investigation-actions').hidden = usage;
+  $('nav-usage').setAttribute('aria-current', usage ? 'page' : 'false');
+  $('nav-topology').setAttribute('aria-current', list || usage ? 'false' : 'page');
   $('nav-incidents').setAttribute('aria-current', list ? 'page' : 'false');
-  $('page-title').textContent = list ? '調查歷史與報告' : '調查工作台';
-  $('page-description').textContent = list ? '查看每次調查的結論、工具證據與保存上下文。' : '追蹤服務觀測，並查看目前調查與 Monitor 紀錄。';
+  $('page-title').textContent = usage ? 'Agent Usage' : list ? '調查歷史與報告' : '調查工作台';
+  $('page-description').textContent = usage ? '查看調查的 token 用量、Prompt cache 命中率與趨勢。' : list ? '查看每次調查的結論、工具證據與保存上下文。' : '追蹤服務觀測，並查看目前調查與 Monitor 紀錄。';
   let id = null;
   try { id = list && parts[1] ? decodeURIComponent(parts[1]) : null; error('route'); }
   catch { error('route', '調查網址編碼不合法。'); }
@@ -258,6 +306,7 @@ function route() {
     if (id) { void loadDetail(id); void loadEvents(id); }
   }
   renderHistory(); if (!list) renderGraph();
+  if (usage) void loadUsagePage();
 }
 
 async function refresh() {
@@ -270,6 +319,7 @@ async function refresh() {
   } catch (e) { error('state', `調查狀態讀取失敗：${e.message}`); }
   finally { refreshBusy = false; $('refresh').disabled = false; }
   await loadHistory();
+  await loadUsagePage();
   if (selectedHistory) { void loadDetail(selectedHistory); void loadEvents(selectedHistory); }
 }
 async function startInvestigation() {
@@ -384,6 +434,7 @@ function dispose() {
 
 export function startWorkspace() {
   document.title = 'NightWatch · 調查工作台';
+  $('nav-usage').hidden = false;
   $('nav-incidents').href = '#investigations'; $('nav-incidents').innerHTML = '調查歷史 <span id="nav-count">—</span>';
   $('source').value = 'live'; $('source').onchange = event => { const url = new URL(location.href); url.searchParams.set('source', event.target.value); location.href = url.href; };
   $('investigation-phase').parentElement.querySelector('h2').textContent = '目前調查';

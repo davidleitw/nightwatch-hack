@@ -9,7 +9,7 @@
   <script type="module" src="workspace.js"></script>
 </head>
 <body>
-<header><a class="brand" href="#topology"><span class="brand-mark" aria-hidden="true">◉</span>NightWatch</a><nav aria-label="主要導覽"><a href="#topology" id="nav-topology">服務拓樸</a><a href="#incidents" id="nav-incidents">事故列表 <span id="nav-count">—</span></a></nav><div class="header-end"><span id="connection" role="status">載入中</span><label class="source-select">資料來源<select id="source"><option value="live">即時 API</option><option value="recording">專案事故錄影</option></select></label></div></header>
+<header><a class="brand" href="#topology"><span class="brand-mark" aria-hidden="true">◉</span>NightWatch</a><nav aria-label="主要導覽"><a href="#topology" id="nav-topology">服務拓樸</a><a href="#incidents" id="nav-incidents">事故列表 <span id="nav-count">—</span></a></nav><div class="header-end"><a href="#usage" id="nav-usage" hidden>Usage</a><span id="connection" role="status">載入中</span><label class="source-select">資料來源<select id="source"><option value="live">即時 API</option><option value="recording">專案事故錄影</option></select></label></div></header>
 <main>
   <div id="errors" role="alert"></div>
   <details id="connection-setup" class="connection-setup">
@@ -48,6 +48,7 @@
     <div id="list-note" role="status"></div><div class="panel table-scroll"><table><thead><tr><th>事故</th><th>處理階段</th><th>故障卡</th><th>偵測時間 · UTC</th><th>結局</th><th><span class="sr-only">操作</span></th></tr></thead><tbody id="incident-rows"></tbody></table><div id="list-empty" class="empty" hidden></div></div><p class="list-footer" id="list-count"></p>
     <section class="panel incident-detail" id="incident-detail" hidden aria-live="polite"></section>
   </section>
+  <section id="usage-view" hidden aria-label="Agent Usage"></section>
   <footer><span id="footer-status">等待資料來源</span><span>NightWatch · 只讀觀測</span></footer>
 </main>
 </body>
