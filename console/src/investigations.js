@@ -209,7 +209,7 @@ function acceptGraph(value, receivedAt = null) {
   if (!viewingHistory) { graph = value; graphReceivedAt = receivedAt; renderGraph(); }
 }
 function acceptState(value, options = {}) {
-  const previous = activeId();
+  const previous = activeId(), previousUsage = usageId();
   if (!store.acceptState(value, options)) return;
   if (options.acceptGraph !== false && value.graph !== null) acceptGraph(value.graph, value.graph_received_at);
   error('graph', value.graph_error ? `服務拓樸來源：${value.graph_error}。保留最後取得的快照。` : value.graph === null ? '目前沒有可用的服務拓樸。調查歷史仍可讀取。' : null);
@@ -217,8 +217,8 @@ function acceptState(value, options = {}) {
   updateStartButton(); renderCurrent();
   if (activeId()) {
     if (previous !== activeId() || !store.events.has(activeId())) void loadEvents(activeId());
-    if (previous !== activeId() || !details.has(activeId())) void loadDetail(activeId(), false);
   }
+  if (usageId() && (previous !== activeId() || previousUsage !== usageId() || !details.has(usageId()))) void loadUsage();
   if (previous !== activeId()) void loadHistory();
   renderUsagePage();
 }
@@ -309,14 +309,13 @@ function activityHTML(id, terminal = false, sourceFilter = 'all') {
     return `<article class="journal-entry agent"><div class="journal-meta"><strong>Agent 工具</strong><span>${esc(start?.payload.tool ?? end?.payload.tool ?? '未提供工具名稱')}</span></div><p class="${row.status === 'failed' || row.status === 'incomplete' ? 'failing' : ''}">${label}</p><p class="report-note">${esc(row.investigation_id)} / ${esc(row.call_id)}${start ? '' : ' · 未收到開始事件'}</p>${start ? `<details><summary>開始時間、參數與內容</summary><p>${esc(at(start.at))}</p>${raw(start.payload)}</details>` : ''}${end ? `<details open><summary>${row.status === 'failed' ? '失敗原因' : row.status === 'reported' ? '提交的報告' : '證據 payload.evidence'}</summary>${row.status === 'recorded' && end.payload.evidence === undefined ? '<p class="failing">成功事件未提供 evidence。</p>' : raw(row.status === 'recorded' ? end.payload.evidence : row.status === 'reported' ? end.payload.report : end.payload)}</details>` : ''}</article>`;
   }).join('') || '<div class="empty">尚未收到此調查的事件。</div>';
 }
-function renderUsage(usage) {
-  const u = readUsage(usage);
-  $('agent-usage').innerHTML = `<div class="usage-heading"><h3>Agent 用量</h3><span>${usage == null ? '尚未回報' : '後端累計'}</span></div><div class="usage-primary"><div><span class="metric-label">總 token</span><strong>${number(u.total)}</strong></div><div><span class="metric-label">快取命中率</span><strong>${number(u.rate, '%', 100)}</strong></div></div>${u.problems.length ? `<p class="failing">${esc(u.problems.join(' '))}</p>` : ''}<details><summary>後端用量原始值</summary>${raw(usage)}</details>`;
+function renderUsage() {
+  const {id, usage, u, problems, stateLabel} = usageViewData();
+  const expanded = $('agent-usage').querySelector('details')?.open;
+  $('agent-usage').innerHTML = `<div class="usage-heading"><h3>Agent 用量</h3><span>${stateLabel}</span></div>${id ? `<p class="usage-note">${activeId() ? '進行中的調查' : '最近一次調查'} · <a href="#investigations/${encodeURIComponent(id)}">${esc(id)}</a></p>` : ''}<div class="usage-primary"><div><span class="metric-label">總 token</span><strong>${number(u.total)}</strong></div><div><span class="metric-label">快取命中率</span><strong>${number(u.rate, '%', 100)}</strong></div></div>${problems.length ? `<p class="failing">${esc(problems.join(' '))}</p>` : ''}<details ${expanded ? 'open' : ''}><summary>後端用量原始值</summary>${raw(usage)}</details>`;
 }
 function usageId() { return activeId() || store.state?.last_completed_investigation_id; }
-function renderUsagePage() {
-  const view = $('usage-view');
-  if (view.hidden) return;
+function usageViewData() {
   const id = usageId(), detail = details.get(id), usage = detail?.usage;
   const cached = usage?.cache_read_tokens !== undefined ? usage.cache_read_tokens : usage?.cached_tokens;
   const calls = usage?.requests !== undefined ? usage.requests : usage?.calls;
@@ -331,6 +330,12 @@ function renderUsagePage() {
   const writes = extra('cache_write_tokens'), tools = extra('tool_calls');
   const reported = [u.input_tokens, u.output_tokens, u.cached_tokens, u.calls, writes, tools].some(value => value !== null);
   const stateLabel = !store.state ? '等待調查狀態' : !id ? '尚無調查' : !detail ? '尚未取得用量' : problems.length ? '資料異常' : reported ? '已回報' : '尚未回報';
+  return {id, usage, u, problems, writes, tools, reported, stateLabel};
+}
+function renderUsagePage() {
+  const view = $('usage-view');
+  if (view.hidden) return;
+  const {id, usage, u, problems, writes, tools, reported, stateLabel} = usageViewData();
   const expanded = view.querySelector('details')?.open;
   const trend = (title, unit) => `<article class="usage-view-chart"><div class="usage-view-chart-heading"><h2>${title}</h2><span>${unit}</span></div><div class="usage-view-chart-empty"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true"><path d="M4 4v16h16"/><circle cx="14" cy="10" r="5"/><path d="M14 7v3l2 1"/></svg><strong>尚無趨勢資料</strong><p>目前只有調查累計值，尚無各時間點的用量。</p></div></article>`;
   view.innerHTML = `<div class="usage-view-context"><div><span class="usage-view-kicker">${activeId() ? '進行中的調查' : '最近一次調查'}</span><p>${id ? esc(id) : '開始調查後，這裡會顯示 Agent 的用量。'}</p></div><div class="usage-view-context-actions"><span class="usage-view-status ${problems.length ? 'usage-view-invalid' : ''}">${stateLabel}</span>${id ? `<a href="#investigations/${encodeURIComponent(id)}">查看調查 →</a>` : ''}<a href="#topology">返回服務拓樸 →</a></div></div>
@@ -345,15 +350,17 @@ function renderUsagePage() {
     <section class="usage-view-breakdown"><div class="usage-view-section-title"><h2>Token 明細</h2><span>後端累計</span></div><dl><div><dt>輸入 token</dt><dd>${number(u.input_tokens)}</dd></div><div><dt>輸出 token</dt><dd>${number(u.output_tokens)}</dd></div><div><dt>其中快取讀取</dt><dd>${number(u.cached_tokens)}</dd></div><div><dt>快取寫入</dt><dd>${number(writes)}</dd></div></dl><p class="usage-view-note">快取讀取包含於輸入，總量不重複加總。命中率代表輸入 token 的快取比例，與回答正確率無關。</p></section>
     <details class="usage-view-raw" ${expanded ? 'open' : ''}><summary>統計口徑與原始值</summary><p>範圍為上方這次調查，不代表帳號總用量。總 token = input_tokens + output_tokens。Prompt cache 命中率 = 快取讀取 ÷ input_tokens × 100%。未回報欄位顯示「—」，實際回報 0 才顯示 0。</p><p>數字以最近一次取得的調查詳情為準，可按「更新資料」重新讀取。</p>${raw(usage)}</details>`;
 }
-let usageLoadingId = null;
-async function loadUsagePage() {
-  if ($('usage-view').hidden) return;
+const usageLoads = new Map();
+async function loadUsage() {
+  renderUsage();
   renderUsagePage();
   const id = usageId();
-  if (!id || id === usageLoadingId) return;
-  usageLoadingId = id;
-  try { await loadDetail(id, false); }
-  finally { if (usageLoadingId === id) usageLoadingId = null; }
+  if (!id) return;
+  if (usageLoads.has(id)) return usageLoads.get(id);
+  const task = loadDetail(id, false);
+  usageLoads.set(id, task);
+  try { await task; }
+  finally { usageLoads.delete(id); }
 }
 function reportHTML(detail) {
   if (!detail) return '<p class="report-note">正在讀取調查詳情。</p>';
@@ -368,7 +375,7 @@ function renderCurrent() {
   $('investigation-phase').innerHTML = summary ? badge(summary) : '';
   $('investigation-summary').innerHTML = summary ? `<h3>${esc(summary.summary_zh || '正在調查目前服務狀態')}</h3><p class="report-note">${esc(id)}</p><p>目前可用工具：get_graph</p>` : '<h3>目前沒有進行中的調查</h3><p class="report-note">可開始新調查，或到歷史查看已保存的報告。服務拓樸持續更新。</p>';
   if (!store.state) $('investigation-summary').innerHTML = '<h3>尚未取得調查狀態</h3><p class="report-note">連線恢復後才能確認目前是否有調查。</p>';
-  renderUsage(detail?.usage);
+  renderUsage();
   const agent = id && journalFilter !== 'monitor' ? activityHTML(id, false, journalFilter) : '';
   const monitor = journalFilter === 'all' || journalFilter === 'monitor' ? [...logs.values()].map(log => `<article class="journal-entry monitor"><div class="journal-meta"><strong>Monitor</strong><span>${esc(log.monitor_id)} · ${esc(log.level)}</span><time>${esc(at(log.occurred_at))}</time></div><p>${esc(log.message)}</p><div class="journal-links">${log.refs.node_ids.map(node => `<button class="node-link" data-locate-node="${esc(node)}">${esc(node)} ↗</button>`).join('')}</div><details><summary>原始 log</summary>${raw(log)}</details></article>`).join('') : '';
   $('journal-entries').innerHTML = agent + monitor || '<div class="empty">目前沒有符合來源的紀錄。</div>';
@@ -487,7 +494,7 @@ function route() {
     if (id) { void loadDetail(id); void loadEvents(id); }
   }
   renderHistory(); if (!list) renderGraph();
-  if (usage) void loadUsagePage();
+  if (usage) void loadUsage();
 }
 
 async function refresh() {
@@ -501,7 +508,7 @@ async function refresh() {
   } catch (e) { error('state', `調查狀態讀取失敗：${e.message}`); }
   finally { refreshBusy = false; $('refresh').disabled = false; }
   await loadHistory();
-  await loadUsagePage();
+  await loadUsage();
   if (selectedHistory) { void loadDetail(selectedHistory); void loadEvents(selectedHistory); }
 }
 async function startInvestigation() {
