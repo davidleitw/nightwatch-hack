@@ -103,7 +103,7 @@ uv `lock --check` 通過，fresh export 與 `requirements.txt` 的依賴內容�
 
 本次故障演練頁已在 production Docker 環境驗證：`make up COMPOSE=docker-compose` 建置兩個 images 並啟動 frontend/backend，`make test COMPOSE=docker-compose` 的既有 10 tests 全部通過，`make smoke` 通過首頁與 health。真 HTTP 驗證包含 `/api/demo-faults` cards 與 busy 409、兩個 checkout 入口的 `checkout_exception` rollback、`database_write_lock` 約 10.18 秒後回傳 500、控制 DELETE 即時生效並恢復寫入，以及 `checkout_delay` 手動解除約 0.83 秒喚醒；另驗證剩餘約 8.64 秒時由 TTL 自動喚醒、backend restart 後 fault inactive 且寫入恢復。log 含 traceback、500 status 與 fault ID。
 
-以 Chrome CDP 真實 DOM 點擊驗證事件頁啟用與解除，並取得 desktop/mobile 截圖；最終截圖 hash/visual review 仍待最後核對。未宣稱三張卡都完成自動到期驗證：本次 TTL 自動喚醒實測為 `checkout_delay`，`database_write_lock` 的 60 秒自動到期尚未單獨驗證。主機直接在 `shop-web/frontend` 執行 `npm run build` 仍因本機 `node_modules` 缺少 `vite` 以 exit 127 結束；Docker production build 已成功，兩者限制不同。
+以 Chrome CDP 真實 DOM 點擊驗證事件頁啟用與解除，並取得 desktop/mobile 截圖；visual review 確認 desktop 三卡完整、390px mobile 單欄無溢出。`main.py`/`demo_faults.py` workspace 與 container hash 一致，前端部署 asset 為本次 production build。未宣稱三張卡都完成自動到期驗證：本次 TTL 自動喚醒實測為 `checkout_delay`，`database_write_lock` 的 60 秒自動到期尚未單獨驗證。主機直接在 `shop-web/frontend` 執行 `npm run build` 仍因本機 `node_modules` 缺少 `vite` 以 exit 127 結束；Docker production build 已成功，兩者限制不同。
 
 ## 文件與交付紀錄
 

@@ -52,5 +52,5 @@
 - `make up COMPOSE=docker-compose` 成功完成兩個 production images 的建置與啟動；`make test COMPOSE=docker-compose` 的既有 10 tests 全部通過，`make smoke` 通過首頁與 health。
 - 真 HTTP 驗證包含 `/api/demo-faults` cards、busy 409、兩個 checkout 入口的 `checkout_exception` rollback、`database_write_lock` 約 10.18 秒後 500、DELETE 即時控制與寫入恢復，以及 `checkout_delay` 手動解除約 0.83 秒喚醒。
 - 驗證剩餘約 8.64 秒時 `checkout_delay` 由 TTL 自動喚醒；backend restart 後 fault inactive 且寫入恢復，log 含 traceback、500 status 與 fault ID。
-- Chrome CDP 真實 DOM 啟用/解除，以及 desktop/mobile 截圖已完成；最終截圖 hash/visual review 尚待核對。
+- Chrome CDP 真實 DOM 啟用/解除，以及 desktop/mobile 截圖已完成；visual review 確認 desktop 三卡完整、390px mobile 單欄無溢出，`main.py`/`demo_faults.py` workspace 與 container hash 一致，前端部署 asset 為本次 production build。
 - 未宣稱三張卡都完成自動到期驗證；`database_write_lock` 的 60 秒自動到期尚未單獨驗證。主機直接 `npm run build` 因 `node_modules` 缺少 `vite` 以 exit 127 結束，但 Docker production build 已成功。

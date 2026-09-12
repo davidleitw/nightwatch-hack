@@ -2,7 +2,7 @@
 
 本文件是 `shop-web` 的 API 契約，欄位與行為以 `backend/app/main.py` 為準，包含商品 CRUD、匿名購物車、既有訂單與購物車結帳。
 
-本機測試與 demo 固定使用 frontend `8080` 與 backend `8000`。API 整合測試、smoke check、主要商品/購物車/結帳流程與三張 demo fault 的 backend HTTP 行為已完成；Chrome CDP 也已驗證事件頁真實 DOM 啟用/解除，最終截圖 hash/visual review 尚待核對。前端購物袋目前仍使用 `localStorage`，尚未串接新的購物車 API。
+本機測試與 demo 固定使用 frontend `8080` 與 backend `8000`。API 整合測試、smoke check、主要商品/購物車/結帳流程與三張 demo fault 的 backend HTTP 行為已完成；Chrome CDP 也已驗證事件頁真實 DOM 啟用/解除，visual review 確認 desktop 三卡完整、390px mobile 單欄無溢出。前端購物袋目前仍使用 `localStorage`，尚未串接新的購物車 API。
 
 ## Base URL
 
@@ -302,4 +302,4 @@ curl -X POST "$BASE_URL/api/carts/$CART_ID/checkout" \
 - `uv lock --check` 通過，fresh `uv export --frozen --no-dev --no-hashes` 與 `requirements.txt` 依賴內容一致；UID 10001 runtime 與 `/data`、`/logs` 寫入權限通過檢查。
 - `app.log` 的 UTC ISO/INFO startup、migration、HTTP 200/201/204/404/422、無 query path、INFO/ERROR traceback、每日 rollover 與 restart 後 log volume 保留通過檢查；isolated backend image 另實測 demo fault controls、兩種 rollback、delay 喚醒與 SQLite lock 500。
 
-Chrome CDP 已以真實 DOM 驗證事件頁啟用/解除並取得 desktop/mobile 截圖；最終截圖 hash/visual review 尚待核對。`checkout_delay` 的 TTL 自動喚醒已驗證，`database_write_lock` 的 60 秒自動到期尚未單獨驗證。破壞性 `make clean CONFIRM=yes` 尚未執行。`make help` 與未帶 `CONFIRM=yes` 的 clean guard 已驗證。
+Chrome CDP 已以真實 DOM 驗證事件頁啟用/解除並取得 desktop/mobile 截圖；visual review 確認 desktop 三卡完整、390px mobile 單欄無溢出，`main.py`/`demo_faults.py` workspace 與 container hash 一致，前端部署 asset 為本次 production build。`checkout_delay` 的 TTL 自動喚醒已驗證，`database_write_lock` 的 60 秒自動到期尚未單獨驗證。破壞性 `make clean CONFIRM=yes` 尚未執行。`make help` 與未帶 `CONFIRM=yes` 的 clean guard 已驗證。
