@@ -7,7 +7,11 @@ sessions in `../.data/investigations.sqlite3` by default; set
 `NIGHTWATCH_GRAPH_URL` to select the operator configured graph source.
 
 Production investigations use `NIGHTWATCH_LLM_API_KEY` (or
-`OPENAI_API_KEY`) and `NIGHTWATCH_LLM_MODEL`. Offline tests may inject a Python
+`OPENAI_API_KEY`) and `NIGHTWATCH_LLM_MODEL` (default `gpt-6-astra`). The live graph
+adapter exposes `get_graph` (including historical timestamps),
+`list_graph_snapshots`, and `get_node_detail`; see [agent tools](../README.md).
+Restart the backend after updating the agent package so new investigations load
+the new tools and prompt. Offline tests may inject a Python
 model factory through `install_investigations(..., model_factory=...)` or by
 replacing `app.state.investigation_manager.model_factory` before application
 startup. HTTP clients cannot select either the model or graph URL.

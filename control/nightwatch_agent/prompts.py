@@ -11,10 +11,20 @@ TOOL_DESCRIPTIONS = {
         "Node measurements include traffic, error ratio, p95 latency in milliseconds, saturation, "
         "liveness, health status and trends. Existing agent assessments are excluded. "
         "Check sources.ok, sources.age_secs and edge.observed before interpreting measurements. "
-        "The current demo endpoint serves synthetic data with fixed seq/at; a successful HTTP "
-        "request does not establish live monitoring. Repeated seq/at does not establish a new "
-        "observation. This tool provides no historical samples, error logs, traces or repairs. "
-        "It takes no arguments; the operator configures the endpoint and demo scenario."
+        "Without timestamp, read the operator-configured graph. When the timestamp argument "
+        "is available, pass a timezone-aware RFC3339 value from list_graph_snapshots to read "
+        "the last retained snapshot at or before that time. Use the returned at/seq, not the "
+        "requested time, in conclusions. A 404 means no retained snapshot or no history API. "
+        "Repeated seq/at does not establish a new observation. Explicit demo queries are "
+        "synthetic; a successful HTTP request alone does not establish live monitoring."
+    ),
+    "list_graph_snapshots": (
+        "List retained Guard Room snapshot identities (seq and at), newest seq first. "
+        "limit is 1-500 (default 100); pass next_before_seq as before_seq for the next page. "
+        "next_before_seq=null means no next page. The index contains no measurements: use "
+        "get_graph(timestamp=at) to inspect selected snapshots around an observed change. "
+        "An empty snapshots list means no retained history; an API error means history could "
+        "not be read. Missing intervals and sequence gaps are not proof of service failure."
     ),
     "get_node_history": (
         "Read a node's measurement history and baseline over window_secs. Compare the timing "
@@ -71,4 +81,17 @@ Choose queries that resolve a specific uncertainty. Do not repeatedly fetch an u
 The current root-cause report validator requires a nonempty node history and a nonempty trace path. A trace ID must come from a successful find_traces call. Onset must cite that root node's history covering the claimed time, with t <= 0 relative to detection.
 If the available tools cannot supply the evidence required by that report, do not invent it. Return 'inconclusive: <observed facts, evidence IDs, limitations, and the next evidence needed>' instead. Describe demo observations explicitly as demo observations.
 Otherwise return only a JSON object matching report_schema, with no Markdown. A valid format does not itself prove the root cause. Write human-facing explanations, including *_zh fields and inconclusive reasons, in Traditional Chinese. Preserve schema field names exactly.
+"""
+
+
+GUARDROOM_PROMPT = """
+For this Guard Room graph investigation, use the following data-specific procedure and semantics:
+1. Call get_graph first. Check at/seq, source freshness, observed flags, null values and which nodes have actual completed calls. Do not assume an incident exists.
+2. When list_graph_snapshots is available, inspect its index and choose a few useful before/after timestamps. Fetch those graphs to compare errors, latency and traffic across candidate nodes and their callers. Follow pagination only when needed. If history is absent or fails, state that limitation and continue with the available observations; do not retry an unchanged failing request.
+3. Use get_node_detail for a focused view of a candidate's latest measurements and incoming/outgoing dependencies when it resolves an uncertainty. It does not provide error text, spans or a baseline. Compare independent causes and evidence against each hypothesis; topology and coincident changes do not establish causation.
+Guard Room aggregates monitor finished/exception events over a rolling window (default 60 seconds). Traffic is completions per second, errors is the fraction of completed invocations that failed, and p95_ms is nearest-rank invocation duration. Nested invocations are not independent end-user requests. Rates are not a count of affected customers.
+alive means the monitor emitted an event within the window. alive=false, especially with null measurements and status=unknown, does NOT mean the service or database is down. All failed completions produce failing, mixed success/failure warning, all successful completions ok, and no completions unknown. Ordinary ERROR logs alone do not change this status.
+Edges come only from configuration. observed=false and null edge metrics mean edge measurements are unavailable, not zero traffic, a broken dependency, or a proven propagation path. Saturation is currently unmeasured; trend=na is not a measured flat trend. Prometheus and Jaeger are not integrated: their ok=false flags do not prove those services are down. logstore freshness refers to the latest known monitor event, not to every node.
+Retained graphs preserve actual timestamps and nullable measurements; they are not the legacy baseline/history tool. Do not calculate a trusted baseline or exact fault onset from them. Bound observed changes between returned snapshots and state monitoring gaps. Query-selector runs may be demo or fixed history; do not describe them as live.
+Investigate useful available evidence before concluding; missing traces is not a reason to skip graph/history analysis. When those tools cannot establish the required root-cause report, finish with inconclusive: followed by a concise Traditional Chinese investigation summary containing observed facts and evidence IDs, candidate causes and counterevidence, uncertainty and the specific next data needed. An inconclusive investigation is completed work with limited evidence, not a claim of repair or verified root cause. Do not invent error-log or trace tools, write logs, subscribe indefinitely to SSE, or request runtime changes.
 """

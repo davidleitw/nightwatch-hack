@@ -15,12 +15,12 @@ from .replay import Recording
 
 async def run(args: argparse.Namespace) -> int:
     schema = json.loads(args.report_schema.read_text())
-    if args.graph_url:
-        data = GraphAPI(args.graph_url, args.report_schema.parent)
+    if not args.fixture and not args.replay_model:
+        data = GraphAPI(args.graph_url or os.environ.get("NIGHTWATCH_GRAPH_URL", "http://127.0.0.1:8001/api/graph"), args.report_schema.parent)
         await data.prepare()
         run_mode = "live_model_graph_api"
     else:
-        data = Recording(args.fixture)
+        data = Recording(args.fixture or args.report_schema.parent.parent / "fixtures/catalog_pool_leak")
         run_mode = "scripted_model_recorded_tools" if args.replay_model else "live_model_recorded_tools"
     if args.describe_context:
         state = Investigation(data.query, Limits())
@@ -46,7 +46,7 @@ async def run(args: argparse.Namespace) -> int:
         endpoint = os.environ.get("NIGHTWATCH_LLM_ENDPOINT", "https://api.openai.com/v1/responses")
         base_url = endpoint.removesuffix("/").removesuffix("/responses")
         client = AsyncOpenAI(api_key=key, base_url=base_url, max_retries=2, timeout=60)
-        model_name = args.model or os.environ.get("NIGHTWATCH_LLM_MODEL", "gpt-5.6-luna")
+        model_name = args.model or os.environ.get("NIGHTWATCH_LLM_MODEL", "gpt-6-astra")
         model = OpenAIResponsesModel(model_name, provider=OpenAIProvider(openai_client=client))
     try:
         result = await investigate(
@@ -69,15 +69,15 @@ def main() -> None:
     os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
     parser = argparse.ArgumentParser(description="NightWatch read-only agent: recorded observations or a graph API")
     source = parser.add_mutually_exclusive_group()
-    source.add_argument("--fixture", type=Path, default=Path("../contracts/fixtures/catalog_pool_leak"), help="Existing incident recording directory")
-    source.add_argument("--graph-url", help="Full graph API URL, including an operator-selected demo state if needed")
+    source.add_argument("--fixture", type=Path, help="Explicitly investigate a recording instead of Guard Room")
+    source.add_argument("--graph-url", help="Guard Room graph URL; defaults to NIGHTWATCH_GRAPH_URL or http://127.0.0.1:8001/api/graph")
     parser.add_argument("--report-schema", type=Path, default=Path("../contracts/schemas/agent-report.schema.json"))
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--replay-model", action="store_true", help="Replay recorded model calls offline; recording source only")
     mode.add_argument("--describe-context", action="store_true", help="Print English instructions, tool definitions and opening context without calling a model")
     mode.add_argument(
         "--model", nargs="?", const="", metavar="MODEL",
-        help="Use a real model; defaults to NIGHTWATCH_LLM_MODEL or gpt-5.6-luna",
+        help="Use a real model; defaults to NIGHTWATCH_LLM_MODEL or gpt-6-astra",
     )
     args = parser.parse_args()
     if args.graph_url and args.replay_model:

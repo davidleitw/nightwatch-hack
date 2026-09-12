@@ -170,7 +170,7 @@ class InvestigationManager:
         base_url = endpoint.removesuffix("/").removesuffix("/responses")
         client = AsyncOpenAI(api_key=key, base_url=base_url, max_retries=2, timeout=60)
         self._clients.append(client)
-        return OpenAIResponsesModel(os.environ.get("NIGHTWATCH_LLM_MODEL", "gpt-5.6-luna"),
+        return OpenAIResponsesModel(os.environ.get("NIGHTWATCH_LLM_MODEL", "gpt-6-astra"),
                                     provider=OpenAIProvider(openai_client=client))
 
     async def start(self) -> None:
@@ -275,9 +275,9 @@ class InvestigationManager:
                 context["messages"] = context.get("messages", [])
             limitations = []
             if result.status == "unresolved":
-                limitations.append("目前只提供 graph snapshot，沒有 history、logs、traces 或 runtime 資料。")
+                limitations.append("目前提供 graph 觀測與已宣告的快照查詢工具；沒有錯誤日誌查詢、trace、可信基線或 runtime 資料，無法確認根因。")
             if data.opening.get("mode") == "graph_api":
-                limitations.append("觀測來源是目前設定的 graph API；demo snapshot 不代表即時服務健康。")
+                limitations.append("觀測來源是設定的 Guard Room API；alive 表示窗口內有事件，不等同服務探活。資料是否新鮮依快照時間及來源欄位判讀。")
             self.store.finish(investigation_id, "completed", result.status, result.reason, result.report,
                               evidence, usage, context, limitations, True)
         except asyncio.CancelledError:

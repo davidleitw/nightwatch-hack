@@ -20,12 +20,13 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models import Model
 from pydantic_ai.usage import RunUsage, UsageLimits
 
-from .prompts import SYSTEM_PROMPT, tool_description
+from .prompts import GUARDROOM_PROMPT, SYSTEM_PROMPT, tool_description
 
 Json = dict[str, Any]
 ContextCallback = Callable[[Json], None]
 TOOL_CAPS = {
     "get_graph": 16384,
+    "list_graph_snapshots": 65536,
     "get_node_history": 3072,
     "get_node_detail": 2048,
     "find_traces": 4096,
@@ -166,8 +167,8 @@ def make_tool(definition: Json) -> Tool[Investigation]:
             if name == "get_trace" and args["trace_id"] not in state.trace_ids:
                 raise ValueError("trace_id must come from a successful find_traces call in this investigation")
             observed = await asyncio.wait_for(state.backend(name, args), timeout=10)
-            if name == "get_graph" and len(encode(observed.result).encode()) > TOOL_CAPS[name]:
-                raise ValueError("Graph exceeds the 16 KiB tool limit; refusing to drop nodes or edges from the topology")
+            if name in {"get_graph", "list_graph_snapshots"} and len(encode(observed.result).encode()) > TOOL_CAPS[name]:
+                raise ValueError("Graph or snapshot index exceeds its tool limit; refusing to drop topology or pagination entries")
             result = bounded_result(observed.result, TOOL_CAPS[name])
             if "error" in result:
                 raise ValueError(result["error"])
@@ -201,7 +202,8 @@ def make_tool(definition: Json) -> Tool[Investigation]:
 def static_instructions(capabilities: Json, report_schema: Json) -> str:
     nodes = [{"id": node["id"], "kind": node["kind"]} for node in capabilities["nodes"]]
     names = [definition["name"] for definition in capabilities["tools"]]
-    return SYSTEM_PROMPT + "available_tools=" + encode(names) + "\nnodes=" + encode(nodes) + "\nreport_schema=" + encode(report_schema)
+    prompt = SYSTEM_PROMPT + (GUARDROOM_PROMPT if "get_graph" in names else "")
+    return prompt + "available_tools=" + encode(names) + "\nnodes=" + encode(nodes) + "\nreport_schema=" + encode(report_schema)
 
 
 def validate_report(report: Json, state: Investigation, node_ids: set[str]) -> None:
