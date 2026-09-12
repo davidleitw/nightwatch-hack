@@ -62,3 +62,29 @@
 - 啟用後使用者回到購物頁手動操作，頁面不自動造訂單；server lease 60 秒後自動解除，也提供 DELETE 手動解除。事件頁離開時清理輪詢，兩個服務入口仍為 `http://localhost:8080/` 與 `http://localhost:8000/`。
 - 本次 production Docker build 已由 `make up COMPOSE=docker-compose` 驗證；既有 10 tests、首頁與 health smoke 均通過。真 HTTP 驗證涵蓋 cards/busy 409、兩個 checkout 入口的 exception rollback、SQLite lock 約 10.18 秒 500 與 DELETE 釋放、delay 手動解除約 0.83 秒喚醒，以及剩餘約 8.64 秒時 delay 的 TTL 自動喚醒；restart 後 fault inactive 且寫入恢復，log 含 traceback/status 500/fault ID。
 - Chrome CDP 已以真實 DOM 驗證啟用/解除並取得 desktop/mobile 截圖；visual review 確認 desktop 三卡完整、390px mobile 單欄無溢出，`main.py`/`demo_faults.py` workspace 與 container hash 一致，前端部署 asset 為本次 production build。未宣稱三張卡均完成自動到期驗證，`database_write_lock` 的 60 秒自動到期尚未單獨驗證。主機直接 `npm run build` 仍因缺少 `vite` 失敗，Docker production build 已成功。
+
+## 2026-09-12｜微服務拆分定案與目前狀態
+
+- 服務固定為五個 containers：`frontend`（Nginx）、`backend`（gateway）、`catalog`、`cart`、`order`。前端 `8080` 與 gateway `8000` 是唯一 host ports；三個業務服務只在 Compose network 使用 `8000`。
+- `shop-data` 保留為 read-only legacy source；catalog/cart/order 各自初始化並匯入所屬表到 private data volume，後續由各自 SQLite 負責。`make up` 先停舊 `frontend/backend` 入口，避免 migration 前舊單庫繼續寫入。
+- 前端以 `daily-cart-id` 對應 server cart，舊 `daily-cart` 僅在成功逐項匯入後清除；商品缺少時顯示錯誤並保留舊內容。cart checkout 使用 `/api/carts/{cart_id}/checkout` 與 `Idempotency-Key`，HTTP 失敗可同 key 重試，未知結果時鎖定修改避免重複訂單。
+- checkout 的跨服務一致性採 order coordinator 的 cart prepare、order commit、cart complete/abort 與 restart reconcile；商品刪除採 cart lazy prune。三張故障卡固定作用 order，catalog/cart 保持可觀察。
+- 本輪文件與設定已完成，`docker-compose ... config` 已解析成功；production build、10 tests、smoke、migration/故障/recovery/idempotency/瀏覽器驗證尚待實際五服務完成後補記，不能沿用歷史兩容器結果作為本輪證據。
+
+## 2026-09-12｜故障卡改為手動解除
+
+- 最新決定移除 60 秒自動恢復；三張 fault card 持續啟用，只有 `DELETE /api/demo-faults` 解除。`lease_seconds`、active 的 `expires_at`、`remaining_seconds` 使用 `null`，delay 每次 checkout request 仍等待 10 秒。
+- 事件頁保留約 2 秒 server polling、active/transition 時禁止其他卡，並改顯示「持續啟用，需手動解除」；本輪不再執行舊 TTL 驗證，待 backend manager 更新後重建整合環境。
+
+## 2026-09-12｜微服務整合實測補記
+
+- `make up COMPOSE=docker-compose` 完成五服務 production build/recreate，`frontend`、`backend`、`catalog`、`cart`、`order` 均為 `Up (healthy)`；對外仍只有 `8080`（frontend）與 `8000`（gateway）。
+- 遷移前 legacy checkpoint 與首次匯入後均為 products 6、carts 0、cart_items 0、orders 34；後續實測建立資料，最後 volume inspection 為 products 6、carts 1、cart_items 1、orders 43。
+- 既有 10 tests 以 `make test COMPOSE=docker-compose` 全數通過（68.038 秒），首頁與 gateway health 的 `make smoke COMPOSE=docker-compose` 通過；`uv lock --check` 與 requirements export consistency 也通過。六張商品圖從 production Nginx 逐張取回 HTTP 200。
+- fault recovery、節點故障、checkout retry 與真瀏覽器互動等待獨立驗證結果，本段沒有預先宣稱通過。先前 service-stop 檢查曾觀察到 catalog 停止時 cart GET 回 500，且 catalog/cart `/logs` 沒有 `app.log`；最終 backend snapshot 若未修正，需在 PR 前處理或列為 blocker。
+
+## 2026-09-12｜接手驗證結案
+
+- 上述 cart GET 500 與 catalog/cart 缺少 app.log 已修正並在真實容器中驗證。另修正前端失敗重試遺失 disabled 欄位內容、abort 早於 prepare 的恢復問題。
+- 三張卡各自等待超過 65 秒仍 active，手動解除後恢復；完成真實 SQLite lock 下的 commit/complete 失敗恢復，以及 order 重啟恢復。既有 10 tests、production build、smoke、Chrome 購物車匯入與重試皆通過，詳見 CHANGELOG 最後一節。
+- 使用者要求 README/CHANGELOG 同步更新，提交前先 pull 最新 master 並 merge 到目前分支，PR 交由專責 reviewer 審查，不自行合併。

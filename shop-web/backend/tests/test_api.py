@@ -1,9 +1,13 @@
 import json
 import os
+import shutil
+import signal
+import socket
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -12,10 +16,231 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 
-BASE = os.getenv("TEST_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
-DB_PATH = os.getenv("TEST_DB_PATH", os.getenv("DB_PATH", "/data/shop.db"))
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+BASE = ""
+DB_PATH = ""
 NO_BODY = object()
 PRODUCT_FIELDS = ("name", "category", "price", "icon", "color", "description")
+
+_RUN_DIRECTORY = None
+_SERVICE_PROCESSES = []
+
+
+def _free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _pythonpath(runtime_root):
+    paths = [str(runtime_root), str(BACKEND_DIR)]
+    control_root = BACKEND_DIR.parent.parent / "control"
+    if (control_root / "monitor").is_dir():
+        paths.append(str(control_root))
+    existing = os.getenv("PYTHONPATH")
+    if existing:
+        paths.append(existing)
+    return os.pathsep.join(paths)
+
+
+def _copy_monitor(runtime_root):
+    """Keep monitor JSONL output under the temporary test root."""
+    candidates = (
+        BACKEND_DIR.parent.parent / "control" / "monitor",
+        Path("/app/monitor"),
+    )
+    source = next((path for path in candidates if (path / "__init__.py").is_file()), None)
+    if source is not None:
+        shutil.copytree(source, runtime_root / "monitor")
+
+
+def _service_environment(runtime_root, legacy_path, **updates):
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PYTHONPATH": _pythonpath(runtime_root),
+            "LEGACY_DB_PATH": str(legacy_path),
+            "LOG_DIR": str(runtime_root / "logs"),
+            "LOG_LEVEL": "WARNING",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            **updates,
+        }
+    )
+    return environment
+
+
+def _start_service(runtime_root, name, module, port, environment):
+    log_path = runtime_root / f"{name}.log"
+    log_stream = log_path.open("w", encoding="utf-8")
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            f"app.{module}:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--log-level",
+            "warning",
+            "--no-access-log",
+        ],
+        cwd=BACKEND_DIR,
+        env=environment,
+        stdout=log_stream,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    _SERVICE_PROCESSES.append((name, process, log_stream, log_path))
+    return process
+
+
+def _wait_for_service(name, process, url, log_path):
+    deadline = time.monotonic() + 30
+    last_error = "尚未回應"
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            output = log_path.read_text(encoding="utf-8", errors="replace")
+            raise RuntimeError(
+                f"{name} process exited with {process.returncode}: {output[-4000:]}"
+            )
+        try:
+            with urlopen(Request(url), timeout=0.5) as response:
+                if response.status == 200:
+                    return
+                last_error = f"HTTP {response.status}"
+        except Exception as exc:  # startup can briefly refuse connections
+            last_error = f"{type(exc).__name__}: {exc}"
+        time.sleep(0.1)
+    output = log_path.read_text(encoding="utf-8", errors="replace")
+    raise RuntimeError(f"{name} did not become healthy ({last_error}): {output[-4000:]}")
+
+
+def _stop_services():
+    for _name, process, log_stream, _log_path in reversed(_SERVICE_PROCESSES):
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    process.kill()
+                process.wait(timeout=10)
+        log_stream.close()
+    _SERVICE_PROCESSES.clear()
+
+
+def setUpModule():
+    """Run the ten API cases against four isolated service processes."""
+    global _RUN_DIRECTORY, BASE, DB_PATH
+    _RUN_DIRECTORY = tempfile.TemporaryDirectory(prefix="shop-api-services-")
+    runtime_root = Path(_RUN_DIRECTORY.name)
+    _copy_monitor(runtime_root)
+    legacy_path = runtime_root / "legacy.db"
+    catalog_db = runtime_root / "catalog" / "shop.db"
+    cart_db = runtime_root / "cart" / "shop.db"
+    order_db = runtime_root / "order" / "order.db"
+    catalog_port = _free_port()
+    cart_port = _free_port()
+    order_port = _free_port()
+    gateway_port = _free_port()
+
+    try:
+        catalog_process = _start_service(
+            runtime_root,
+            "catalog",
+            "catalog",
+            catalog_port,
+            _service_environment(runtime_root, legacy_path, DB_PATH=str(catalog_db)),
+        )
+        _wait_for_service(
+            "catalog",
+            catalog_process,
+            f"http://127.0.0.1:{catalog_port}/api/health",
+            runtime_root / "catalog.log",
+        )
+
+        cart_process = _start_service(
+            runtime_root,
+            "cart",
+            "cart",
+            cart_port,
+            _service_environment(
+                runtime_root,
+                legacy_path,
+                DB_PATH=str(cart_db),
+                CATALOG_URL=f"http://127.0.0.1:{catalog_port}",
+            ),
+        )
+        _wait_for_service(
+            "cart",
+            cart_process,
+            f"http://127.0.0.1:{cart_port}/api/health",
+            runtime_root / "cart.log",
+        )
+
+        order_process = _start_service(
+            runtime_root,
+            "order",
+            "order",
+            order_port,
+            _service_environment(
+                runtime_root,
+                legacy_path,
+                DB_PATH=str(order_db),
+                ORDER_DB_PATH=str(order_db),
+                CATALOG_URL=f"http://127.0.0.1:{catalog_port}",
+                CART_URL=f"http://127.0.0.1:{cart_port}",
+            ),
+        )
+        _wait_for_service(
+            "order",
+            order_process,
+            f"http://127.0.0.1:{order_port}/internal/health",
+            runtime_root / "order.log",
+        )
+
+        gateway_process = _start_service(
+            runtime_root,
+            "gateway",
+            "main",
+            gateway_port,
+            _service_environment(
+                runtime_root,
+                legacy_path,
+                CATALOG_URL=f"http://127.0.0.1:{catalog_port}",
+                CART_URL=f"http://127.0.0.1:{cart_port}",
+                ORDER_URL=f"http://127.0.0.1:{order_port}",
+            ),
+        )
+        _wait_for_service(
+            "gateway",
+            gateway_process,
+            f"http://127.0.0.1:{gateway_port}/api/health",
+            runtime_root / "gateway.log",
+        )
+    except BaseException:
+        _stop_services()
+        _RUN_DIRECTORY.cleanup()
+        _RUN_DIRECTORY = None
+        raise
+
+    BASE = f"http://127.0.0.1:{gateway_port}"
+    DB_PATH = str(order_db)
+
+
+def tearDownModule():
+    global _RUN_DIRECTORY
+    _stop_services()
+    if _RUN_DIRECTORY is not None:
+        _RUN_DIRECTORY.cleanup()
+        _RUN_DIRECTORY = None
 
 
 class ApiTests(unittest.TestCase):
@@ -515,46 +740,189 @@ class ApiTests(unittest.TestCase):
                 self.assertEqual(status, 422)
 
     def test_legacy_database_migration_is_idempotent_and_preserves_order(self):
-        backend_dir = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory(prefix="shop-api-migration-") as directory:
-            db_path = Path(directory) / "legacy.db"
+            root = Path(directory)
+            legacy_path = root / "legacy.db"
+            catalog_path = root / "catalog" / "shop.db"
+            cart_path = root / "cart" / "shop.db"
+            order_path = root / "order" / "order.db"
             legacy_payload = json.dumps({"id": "legacy-order", "total": 42}, ensure_ascii=False)
-            with sqlite3.connect(db_path) as db:
-                db.execute("CREATE TABLE orders (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, payload TEXT NOT NULL)")
-                db.execute("INSERT INTO orders VALUES (?, ?, ?)", ("legacy-order", "2026-01-01T00:00:00+00:00", legacy_payload))
+            with sqlite3.connect(legacy_path) as db:
+                db.execute(
+                    """
+                    CREATE TABLE products (
+                        id INTEGER PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        category TEXT NOT NULL,
+                        price INTEGER NOT NULL,
+                        icon TEXT NOT NULL,
+                        color TEXT NOT NULL,
+                        description TEXT NOT NULL
+                    )
+                    """
+                )
+                db.execute(
+                    "INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (41, "Legacy 杯", "legacy", 123, "L", "#D6E4D8", "保留商品"),
+                )
+                db.execute(
+                    "CREATE TABLE carts (id TEXT PRIMARY KEY, created_at TEXT NOT NULL)"
+                )
+                db.execute(
+                    """
+                    CREATE TABLE cart_items (
+                        cart_id TEXT NOT NULL,
+                        product_id INTEGER NOT NULL,
+                        quantity INTEGER NOT NULL
+                    )
+                    """
+                )
+                db.execute(
+                    "INSERT INTO carts VALUES (?, ?)",
+                    ("legacy-cart", "2026-01-01T00:00:00+00:00"),
+                )
+                db.execute(
+                    "INSERT INTO cart_items VALUES (?, ?, ?)",
+                    ("legacy-cart", 41, 2),
+                )
+                db.execute(
+                    "CREATE TABLE orders (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, payload TEXT NOT NULL)"
+                )
+                db.execute(
+                    "INSERT INTO orders VALUES (?, ?, ?)",
+                    ("legacy-order", "2026-01-01T00:00:00+00:00", legacy_payload),
+                )
 
-            environment = os.environ.copy()
-            environment["DB_PATH"] = str(db_path)
-            environment["PYTHONPATH"] = str(backend_dir)
-            command = [sys.executable, "-c", "from app.main import init_db; init_db(); init_db()"]
-            result = subprocess.run(command, cwd=backend_dir, env=environment, capture_output=True, text=True, timeout=30)
-            self.assertEqual(result.returncode, 0, result.stderr)
+            def initialize(module, environment):
+                command = [sys.executable, "-c", module]
+                result = subprocess.run(
+                    command,
+                    cwd=BACKEND_DIR,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
 
-            with sqlite3.connect(db_path) as db:
+            common_environment = _service_environment(root, legacy_path)
+            catalog_environment = {
+                **common_environment,
+                "DB_PATH": str(catalog_path),
+            }
+            cart_environment = {
+                **common_environment,
+                "DB_PATH": str(cart_path),
+            }
+            order_environment = {
+                **common_environment,
+                "DB_PATH": str(order_path),
+                "ORDER_DB_PATH": str(order_path),
+            }
+            catalog_init = "from app.catalog import init_db; init_db()"
+            cart_init = "from app.cart import init_db; init_db()"
+            order_init = "import os; from app.order import OrderStore; OrderStore._initialize_sync(os.environ['ORDER_DB_PATH'])"
+            for module, environment in (
+                (catalog_init, catalog_environment),
+                (cart_init, cart_environment),
+                (order_init, order_environment),
+            ):
+                initialize(module, environment)
+                initialize(module, environment)
+
+            with sqlite3.connect(catalog_path) as db:
                 tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
                 self.assertIn("products", tables)
                 before = db.execute("SELECT id FROM products ORDER BY id").fetchall()
-                old_order = db.execute("SELECT payload FROM orders WHERE id = 'legacy-order'").fetchone()
+                self.assertEqual(before, [(41,)])
+            with sqlite3.connect(cart_path) as db:
+                migrated_cart = db.execute(
+                    "SELECT id, created_at FROM carts WHERE id = 'legacy-cart'"
+                ).fetchone()
+                migrated_item = db.execute(
+                    "SELECT cart_id, product_id, quantity FROM cart_items"
+                ).fetchone()
+            self.assertEqual(
+                migrated_cart,
+                ("legacy-cart", "2026-01-01T00:00:00+00:00"),
+            )
+            self.assertEqual(migrated_item, ("legacy-cart", 41, 2))
+            with sqlite3.connect(order_path) as db:
+                old_order = db.execute(
+                    "SELECT payload FROM orders WHERE id = 'legacy-order'"
+                ).fetchone()
             self.assertGreater(len(before), 0)
             self.assertEqual(len(before), len({row[0] for row in before}))
             self.assertIsNotNone(old_order)
 
-            result = subprocess.run(command[:], cwd=backend_dir, env=environment, capture_output=True, text=True, timeout=30)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            with sqlite3.connect(db_path) as db:
+            initialize(catalog_init, catalog_environment)
+            with sqlite3.connect(catalog_path) as db:
                 after_second_init = db.execute("SELECT id FROM products ORDER BY id").fetchall()
             self.assertEqual(after_second_init, before)
 
             removed_id = before[0][0]
-            with sqlite3.connect(db_path) as db:
+            with sqlite3.connect(catalog_path) as db:
                 db.execute("DELETE FROM products WHERE id = ?", (removed_id,))
-            result = subprocess.run(command[:], cwd=backend_dir, env=environment, capture_output=True, text=True, timeout=30)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            with sqlite3.connect(db_path) as db:
+            initialize(catalog_init, catalog_environment)
+            with sqlite3.connect(catalog_path) as db:
                 after_delete_and_init = db.execute("SELECT id FROM products ORDER BY id").fetchall()
-                preserved_order = db.execute("SELECT payload FROM orders WHERE id = 'legacy-order'").fetchone()
             self.assertEqual(after_delete_and_init, [row for row in before if row[0] != removed_id])
+            with sqlite3.connect(order_path) as db:
+                preserved_order = db.execute(
+                    "SELECT payload FROM orders WHERE id = 'legacy-order'"
+                ).fetchone()
             self.assertEqual(preserved_order, old_order)
+
+            orders_only_legacy = root / "orders-only.db"
+            seeded_catalog = root / "seeded-catalog" / "shop.db"
+            with sqlite3.connect(orders_only_legacy) as db:
+                db.execute("CREATE TABLE orders (id TEXT PRIMARY KEY)")
+                db.execute("INSERT INTO orders VALUES ('seed-trigger')")
+            seed_environment = _service_environment(
+                root,
+                orders_only_legacy,
+                DB_PATH=str(seeded_catalog),
+            )
+            initialize(catalog_init, seed_environment)
+            with sqlite3.connect(seeded_catalog) as db:
+                seeded_before = db.execute("SELECT id FROM products ORDER BY id").fetchall()
+            self.assertEqual(len(seeded_before), 6)
+            seeded_removed_id = seeded_before[0][0]
+            with sqlite3.connect(seeded_catalog) as db:
+                db.execute("DELETE FROM products WHERE id = ?", (seeded_removed_id,))
+            initialize(catalog_init, seed_environment)
+            with sqlite3.connect(seeded_catalog) as db:
+                seeded_after_delete = db.execute("SELECT id FROM products ORDER BY id").fetchall()
+            self.assertEqual(
+                seeded_after_delete,
+                [row for row in seeded_before if row[0] != seeded_removed_id],
+            )
+
+            empty_products_legacy = root / "empty-products.db"
+            empty_catalog = root / "empty-catalog" / "shop.db"
+            with sqlite3.connect(empty_products_legacy) as db:
+                db.execute(
+                    """
+                    CREATE TABLE products (
+                        id INTEGER PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        category TEXT NOT NULL,
+                        price INTEGER NOT NULL,
+                        icon TEXT NOT NULL,
+                        color TEXT NOT NULL,
+                        description TEXT NOT NULL
+                    )
+                    """
+                )
+            empty_environment = _service_environment(
+                root,
+                empty_products_legacy,
+                DB_PATH=str(empty_catalog),
+            )
+            initialize(catalog_init, empty_environment)
+            with sqlite3.connect(empty_catalog) as db:
+                empty_products = db.execute("SELECT id FROM products").fetchall()
+            self.assertEqual(empty_products, [])
 
 
 

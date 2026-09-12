@@ -11,8 +11,7 @@ import asyncio
 import sqlite3
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from time import monotonic
+from datetime import datetime, timezone
 
 from .logging_config import logger
 
@@ -22,7 +21,6 @@ FAULT_IDS = (
     "database_write_lock",
     "checkout_delay",
 )
-FAULT_TTL_SECONDS = 60.0
 CHECKOUT_DELAY_SECONDS = 10.0
 DB_LOCK_ACQUIRE_TIMEOUT_SECONDS = 1.0
 _POLL_INTERVAL_SECONDS = 0.05
@@ -117,8 +115,6 @@ class _DatabaseLockWorker:
 class _FaultState:
     fault_id: str
     started_at: str
-    expires_monotonic: float | None = None
-    expires_at: str | None = None
     active: bool = False
     pending: bool = False
     cleanup_pending: bool = False
@@ -132,62 +128,28 @@ def _utc_timestamp() -> str:
     )
 
 
-def _new_lease() -> tuple[str, float, str]:
-    now = datetime.now(timezone.utc)
-    return (
-        now.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
-        monotonic() + FAULT_TTL_SECONDS,
-        (now + timedelta(seconds=FAULT_TTL_SECONDS))
-        .isoformat(timespec="milliseconds")
-        .replace("+00:00", "Z"),
-    )
-
-
 class DemoFaultManager:
     """Coordinate one process-local demo fault and its cleanup lifecycle."""
 
-    def __init__(self) -> None:
+    def __init__(self, database_path_provider=None) -> None:
         self._state_lock = threading.RLock()
         self._operation_lock = asyncio.Lock()
+        self._database_path_provider = database_path_provider
         self._current: _FaultState | None = None
-        self._expiry_task: asyncio.Task[None] | None = None
-        self._shutdown_event: asyncio.Event | None = None
 
     async def start(self) -> None:
         async with self._operation_lock:
-            if self._expiry_task is not None and not self._expiry_task.done():
-                return
-            self._shutdown_event = asyncio.Event()
-            self._expiry_task = asyncio.create_task(
-                self._expiry_loop(),
-                name="shop-demo-fault-expiry",
-            )
             logger.info("demo fault manager started")
 
     async def shutdown(self) -> None:
-        task: asyncio.Task[None] | None
         async with self._operation_lock:
             current = self._current
             if current is not None:
                 await self._cleanup_current_locked(current, reason="shutdown")
-            shutdown_event = self._shutdown_event
-            if shutdown_event is not None:
-                shutdown_event.set()
-            task = self._expiry_task
-            self._expiry_task = None
-            self._shutdown_event = None
-
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
         logger.info("demo fault manager stopped")
 
     async def get_state(self) -> dict:
         async with self._operation_lock:
-            await self._cleanup_expired_locked()
             return self._response()
 
     async def activate(self, fault_id: str) -> dict:
@@ -195,7 +157,6 @@ class DemoFaultManager:
             raise ValueError(f"unknown demo fault id: {fault_id}")
 
         async with self._operation_lock:
-            await self._cleanup_expired_locked()
             with self._state_lock:
                 if self._current is not None:
                     raise DemoFaultConflictError(
@@ -213,21 +174,12 @@ class DemoFaultManager:
                 await self._activate_database_lock_locked(state)
             else:
                 with self._state_lock:
-                    started_at, expires_monotonic, expires_at = _new_lease()
-                    state.started_at = started_at
-                    state.expires_monotonic = expires_monotonic
-                    state.expires_at = expires_at
                     state.active = True
-                logger.info(
-                    "demo fault activated fault_id=%s expires_at=%s",
-                    fault_id,
-                    state.expires_at,
-                )
+                logger.info("demo fault activated fault_id=%s", fault_id)
             return self._response()
 
     async def deactivate(self) -> dict:
         async with self._operation_lock:
-            await self._cleanup_expired_locked()
             with self._state_lock:
                 current = self._current
             if current is not None:
@@ -242,14 +194,12 @@ class DemoFaultManager:
                 current is None
                 or not current.active
                 or current.cleanup_pending
-                or current.expires_monotonic is None
-                or current.expires_monotonic <= monotonic()
             ):
                 return None
             return current.fault_id
 
     async def wait_for_checkout_delay(self) -> str | None:
-        """Wait without blocking the event loop and wake on clear/expiry."""
+        """Wait without blocking the event loop and wake on manual clear."""
         with self._state_lock:
             current = self._current
             if (
@@ -261,19 +211,14 @@ class DemoFaultManager:
                 return None
             fault_id = current.fault_id
             wake_event = current.wake_event
-            remaining = min(
-                CHECKOUT_DELAY_SECONDS,
-                max(
-                    0.0,
-                    (current.expires_monotonic or monotonic()) - monotonic(),
-                ),
-            )
 
         try:
-            await asyncio.wait_for(wake_event.wait(), timeout=remaining)
+            await asyncio.wait_for(
+                wake_event.wait(),
+                timeout=CHECKOUT_DELAY_SECONDS,
+            )
         except asyncio.TimeoutError:
-            async with self._operation_lock:
-                await self._cleanup_expired_locked()
+            pass
         return fault_id
 
     async def _activate_database_lock_locked(self, state: _FaultState) -> None:
@@ -322,10 +267,6 @@ class DemoFaultManager:
         with self._state_lock:
             cancelled = state.cleanup_pending or self._current is not state
             if not cancelled:
-                started_at, expires_monotonic, expires_at = _new_lease()
-                state.started_at = started_at
-                state.expires_monotonic = expires_monotonic
-                state.expires_at = expires_at
                 state.pending = False
                 state.active = True
 
@@ -333,22 +274,7 @@ class DemoFaultManager:
             await self._cleanup_current_locked(state, reason="activation_cancelled")
             raise DemoFaultUnavailableError("database write lock activation cancelled")
 
-        logger.info(
-            "demo fault activated fault_id=%s expires_at=%s",
-            state.fault_id,
-            state.expires_at,
-        )
-
-    async def _cleanup_expired_locked(self) -> None:
-        with self._state_lock:
-            current = self._current
-            expired = (
-                current is not None
-                and current.expires_monotonic is not None
-                and current.expires_monotonic <= monotonic()
-            )
-        if expired and current is not None:
-            await self._cleanup_current_locked(current, reason="ttl")
+        logger.info("demo fault activated fault_id=%s", state.fault_id)
 
     async def _cleanup_current_locked(
         self,
@@ -383,47 +309,31 @@ class DemoFaultManager:
             reason,
         )
 
-    async def _expiry_loop(self) -> None:
-        shutdown_event = self._shutdown_event
-        if shutdown_event is None:
-            return
-        try:
-            while not shutdown_event.is_set():
-                try:
-                    await asyncio.wait_for(
-                        shutdown_event.wait(),
-                        timeout=_POLL_INTERVAL_SECONDS,
-                    )
-                except asyncio.TimeoutError:
-                    pass
-                if shutdown_event.is_set():
-                    return
-                async with self._operation_lock:
-                    await self._cleanup_expired_locked()
-        except asyncio.CancelledError:
-            raise
-
     async def _wait_for_thread_event(
         self,
         event: threading.Event,
         timeout: float | None = None,
     ) -> bool:
-        deadline = monotonic() + timeout if timeout is not None else None
-        while not event.is_set():
-            if deadline is None:
+        async def poll() -> None:
+            while not event.is_set():
                 await asyncio.sleep(_POLL_INTERVAL_SECONDS)
-                continue
-            remaining = deadline - monotonic()
-            if remaining <= 0:
-                return False
-            await asyncio.sleep(min(_POLL_INTERVAL_SECONDS, remaining))
+
+        try:
+            if timeout is None:
+                await poll()
+            else:
+                await asyncio.wait_for(poll(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return False
         return True
 
-    @staticmethod
-    def _database_path():
-        # Import lazily to avoid importing app.main while app.main imports this
-        # module.  The call happens only after the app's migration completed.
-        from .main import database_path
+    def _database_path(self):
+        # Order service instances inject their private database path.  The
+        # fallback keeps the legacy standalone manager usable without importing
+        # the public gateway during module initialization.
+        if self._database_path_provider is not None:
+            return self._database_path_provider()
+        from .common import database_path
 
         return database_path()
 
@@ -442,23 +352,18 @@ class DemoFaultManager:
                     status = None
 
                 if status is not None:
-                    remaining_seconds = (
-                        max(0.0, current.expires_monotonic - monotonic())
-                        if current.expires_monotonic is not None
-                        else 0.0
-                    )
                     active = {
                         "fault_id": current.fault_id,
                         "started_at": current.started_at,
-                        "expires_at": current.expires_at,
-                        "remaining_seconds": round(remaining_seconds, 3),
+                        "expires_at": None,
+                        "remaining_seconds": None,
                         "status": status,
                     }
 
         return {
             "cards": [dict(card) for card in FAULT_CARDS],
             "active": active,
-            "lease_seconds": int(FAULT_TTL_SECONDS),
+            "lease_seconds": None,
             "delay_seconds": int(CHECKOUT_DELAY_SECONDS),
         }
 

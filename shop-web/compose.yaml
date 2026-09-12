@@ -1,24 +1,94 @@
 version: "3.8"
+
+x-backend-common: &backend-common
+  build: ./backend
+  image: nightwatch-shop-backend:local
+  expose:
+    - "8000"
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+    interval: 10s
+    timeout: 3s
+    retries: 5
+    start_period: 10s
+
 services:
-  backend:
-    build: ./backend
-    ports:
-      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+  catalog:
+    <<: *backend-common
+    command: ["uvicorn", "app.catalog:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
+      DB_PATH: /data/shop.db
+      LEGACY_DB_PATH: /legacy/shop.db
       LOG_DIR: /logs
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
-      - shop-data:/data
+      - catalog-data:/data
+      - catalog-logs:/logs
+      - shop-data:/legacy:ro
+
+  cart:
+    <<: *backend-common
+    command: ["uvicorn", "app.cart:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      DB_PATH: /data/shop.db
+      LEGACY_DB_PATH: /legacy/shop.db
+      CATALOG_URL: http://catalog:8000
+      LOG_DIR: /logs
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - cart-data:/data
+      - cart-logs:/logs
+      - shop-data:/legacy:ro
+    depends_on:
+      catalog:
+        condition: service_healthy
+
+  order:
+    <<: *backend-common
+    command: ["uvicorn", "app.order:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      ORDER_DB_PATH: /data/order.db
+      LEGACY_DB_PATH: /legacy/shop.db
+      CATALOG_URL: http://catalog:8000
+      CART_URL: http://cart:8000
+      LOG_DIR: /logs
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - order-data:/data
+      - order-logs:/logs
+      - shop-data:/legacy:ro
+      - ../control/monitor:/app/monitor:ro
+      - ../control/tmp:/app/tmp
+    depends_on:
+      catalog:
+        condition: service_healthy
+      cart:
+        condition: service_healthy
+
+  backend:
+    <<: *backend-common
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    environment:
+      CATALOG_URL: http://catalog:8000
+      CART_URL: http://cart:8000
+      ORDER_URL: http://order:8000
+      LOG_DIR: /logs
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
       - shop-logs:/logs
       - ../control/monitor:/app/monitor:ro
       - ../control/tmp:/app/tmp
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
+    depends_on:
+      catalog:
+        condition: service_healthy
+      cart:
+        condition: service_healthy
+      order:
+        condition: service_healthy
+
   frontend:
     build: ./frontend
     ports:
@@ -32,6 +102,13 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+
 volumes:
   shop-data:
   shop-logs:
+  catalog-data:
+  cart-data:
+  order-data:
+  catalog-logs:
+  cart-logs:
+  order-logs:

@@ -70,6 +70,7 @@ h2 { margin: 10px 0; font-size: 24px; letter-spacing: 1px; }
 .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 30px 23px; }
 .product { overflow: hidden; border: 1px solid #eeeee7; border-radius: 9px; background: #fff; }
 .product-art { position: relative; display: grid; place-items: center; height: 235px; }
+.product-photo { width: 100%; height: 100%; object-fit: cover; }
 .product-emoji { transition: transform .2s; filter: drop-shadow(4px 12px 7px #0002); font-size: 108px; }
 .product:hover .product-emoji { transform: translateY(-5px) rotate(-5deg); }
 .product-number { position: absolute; top: 18px; left: 18px; opacity: .45; font-size: 8px; letter-spacing: 1.5px; }
@@ -100,6 +101,7 @@ dialog::backdrop { background: #17251e88; backdrop-filter: blur(3px); }
 .dialog-head small { color: #88907e; font-size: 15px; }
 .dialog-head button { border: 0; padding: 10px; background: transparent; }
 .cart-line { display: flex; align-items: center; gap: 13px; padding: 17px 0; border-bottom: 1px solid #e3e5db; }
+.cart-photo { width: 58px; height: 58px; flex: 0 0 58px; object-fit: cover; border-radius: 5px; }
 .cart-icon { padding: 12px; border-radius: 5px; font-size: 32px; }
 .cart-line h3 { margin: 0 0 5px; font-size: 14px; }
 .cart-line small { color: #788271; }

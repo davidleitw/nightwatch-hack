@@ -1,52 +1,60 @@
 # Backend
 
-`shop-web/backend/` 提供日日選物的 FastAPI API、SQLite 資料保存與 application logging。完整 endpoint、request/response 欄位、限制與錯誤狀態碼請見 [../docs/API.md](../docs/API.md)。
+`shop-web/backend/` contains the FastAPI public gateway and the order service for 日日選物. The gateway keeps the existing public paths and validation schemas while forwarding product, cart, and checkout work to separate service owners. Full public fields and examples are in [../docs/API.md](../docs/API.md).
 
-## 商品 CRUD
+## Public API ownership
 
-`/api/products` 提供商品清單、單筆讀取、建立、完整更新、部分更新與刪除：
+The public base URL remains `http://localhost:8000` for direct backend access or `http://localhost:8080` through the frontend proxy. `app.main:app` is the stateless gateway:
 
-| 操作 | Endpoint | 成功回應 |
+- `GET/POST/PUT/PATCH/DELETE /api/products...` forwards to `CATALOG_URL`.
+- `/api/carts` and all cart item paths forward to `CART_URL`; cart checkout is handled by `ORDER_URL`.
+- `POST /api/orders` and `/api/demo-faults` forward to `ORDER_URL`.
+- `/api/health` checks the order service through its internal health endpoint.
+
+The gateway validates the same public Pydantic models as the original API: product IDs are strict positive integers up to 2^63-1, prices are strict integers from 1 to 1,000,000,000, quantities are strict integers from 1 to 99, and product/cart/order request fields reject unknown fields. Downstream response status and JSON body are preserved. A downstream connection or timeout becomes HTTP 503; a downstream HTTP 4xx/5xx is relayed unchanged.
+
+## Product and cart CRUD
+
+The public product and anonymous cart CRUD contract is unchanged:
+
+| Operation | Endpoint | Success |
 | --- | --- | --- |
-| 列出商品 | `GET /api/products` | 200，商品陣列 |
-| 讀取商品 | `GET /api/products/{id}` | 200，商品物件 |
-| 建立商品 | `POST /api/products` | 201，商品物件 |
-| 完整更新 | `PUT /api/products/{id}` | 200，商品物件 |
-| 部分更新 | `PATCH /api/products/{id}` | 200，商品物件 |
-| 刪除商品 | `DELETE /api/products/{id}` | 204，無 body |
+| List products | `GET /api/products` | 200, product array |
+| Read product | `GET /api/products/{id}` | 200, product object |
+| Create product | `POST /api/products` | 201, product object |
+| Replace product | `PUT /api/products/{id}` | 200, product object |
+| Patch product | `PATCH /api/products/{id}` | 200, product object |
+| Delete product | `DELETE /api/products/{id}` | 204, no body |
+| Create cart | `POST /api/carts` | 201, `{id, items, total}` |
+| Read cart | `GET /api/carts/{cart_id}` | 200, cart |
+| Delete cart | `DELETE /api/carts/{cart_id}` | 204, no body |
+| Add or accumulate item | `POST /api/carts/{cart_id}/items` | 200, cart |
+| Read items | `GET /api/carts/{cart_id}/items` | 200, item array |
+| Set quantity | `PATCH /api/carts/{cart_id}/items/{product_id}` | 200, cart |
+| Remove item | `DELETE /api/carts/{cart_id}/items/{product_id}` | 200, cart |
+| Clear cart | `DELETE /api/carts/{cart_id}/items` | 200, empty cart |
 
-商品欄位為 `name`、`category`、`price`、`icon`、`color`、`description`。POST 與 PUT 必須提供全部六欄位；PATCH 至少提供一欄。`name`、`category`、`icon` 會 trim 後檢查不可為空，長度上限分別為 80、40、32；`description` 最長 2,000 字元且可為空；`price` 必須是嚴格整數 1..1,000,000,000 NTD；`color` 必須符合 `#RRGGBB`。`id` 由 server 自動給定，path 中的商品 ID 必須是 1..9,223,372,036,854,775,807 的整數；寫入 request 的 `id`、未知欄位與 `null` 都回傳 422。
+Catalog and cart own separate SQLite databases. On first initialization each service may import its own tables from the read-only `LEGACY_DB_PATH` mount and records a migration version so a restart does not import or seed again. The service-specific database paths are configured by their environment; the order service defaults to `/data/order.db` and the common single-service fallback remains `/data/shop.db`.
 
-不存在的商品回傳 404。刪除商品會以資料庫的 foreign key cascade 同步移除購物車中的該商品；已建立訂單的商品快照不會改變。
+## Checkout and durable operations
 
-## 匿名購物車 CRUD
+`POST /api/orders` keeps the request `{name, address, items}` and `POST /api/carts/{cart_id}/checkout` keeps `{name, address}`. Both return the existing `OrderResponse` with status 201 on success. The order service resolves current prices through catalog and stores the order snapshot in its own `orders` table.
 
-`/api/carts` 不需要登入或 token，提供購物車與商品項目的完整生命週期：
+An optional `Idempotency-Key` is forwarded by the gateway. Repeating the same key with the same request returns the original committed order without creating another order; reusing it for different checkout content returns 409. This applies to both checkout entry points, and the fingerprint includes the cart ID for cart checkout.
 
-| 操作 | Endpoint | 成功回應 |
-| --- | --- | --- |
-| 建立購物車 | `POST /api/carts` | 201，`{id, items, total}` |
-| 讀取購物車 | `GET /api/carts/{cart_id}` | 200，購物車 |
-| 刪除購物車 | `DELETE /api/carts/{cart_id}` | 204，無 body |
-| 新增/累加商品 | `POST /api/carts/{cart_id}/items` | 200，購物車 |
-| 讀取商品明細 | `GET /api/carts/{cart_id}/items` | 200，items 陣列 |
-| 設定商品數量 | `PATCH /api/carts/{cart_id}/items/{product_id}` | 200，購物車 |
-| 移除商品 | `DELETE /api/carts/{cart_id}/items/{product_id}` | 200，購物車 |
-| 清空購物車 | `DELETE /api/carts/{cart_id}/items` | 200，空購物車 |
+Cart checkout uses these order-owned operation states: `preparing`, `committed`, `done`, and `aborted`. The order service records an operation and attempt before calling the cart service. It then reserves a cart, looks up current catalog prices, and commits the order and `committed` operation in one order SQLite transaction. If the cart complete call fails after commit, the operation remains `committed`; a retry with the same key or the periodic reconciler completes the cart before marking it `done`. A pre-commit failure attempts the idempotent cart abort and records `aborted`.
 
-建立購物車不帶 request body。新增商品使用 `{product_id, quantity}`，既有商品會累加；設定數量使用 `{quantity}`，是絕對數量。`quantity` 必須是嚴格整數 1..99，累加後超過 99 回傳 400。購物車 response 的每個 line 包含完整商品欄位、`product_id`、`quantity` 與 server 計算的 `line_total`，`total` 是所有 line 的總和；商品價格變更後，讀取或修改購物車會用目前價格重算。
+The internal protocol is service-to-service only:
 
-未知購物車、商品或購物車商品項目回傳 404；request schema 或 path 不符合限制回傳 422。移除商品使用 DELETE，不以 quantity 0 代替。
+- Cart prepare: `POST /internal/carts/{cart_id}/prepare` with `{operation_id}` returns `{cart_id, operation_id, items}`. The same operation is idempotent; another operation holding the cart receives 400.
+- Cart release: `POST /internal/carts/{cart_id}/complete` or `/abort` with `{operation_id}` returns 204 and is idempotent.
+- Catalog lookup: `POST /internal/products/lookup` with `{product_ids}` returns `{products, missing_ids}`.
 
-## 結帳與訂單資料庫
+The order service runs SQLite work in its own database executor, while outgoing business requests use a separate standard-library HTTP executor. Control requests used by reconciliation and fault controls use a separate short-timeout executor, so a slow business write does not occupy the control path.
 
-保留 `POST /api/orders`，request 為 `{name, address, items}`：`name` trim 後長度 1..80，`address` trim 後長度 5..300，`items` 為 1..50 個 `{product_id, quantity}`，其中 ID 為正整數、數量為嚴格整數 1..99。未知商品回傳 400；相同商品會合併數量，合併後超過 99 件也回傳 400。成功回傳 201 與訂單 response。
+## Demo fault controls
 
-另提供 `POST /api/carts/{cart_id}/checkout`，request 只有 `{name, address}`。後端以目前商品價格建立訂單，成功回傳 201，並在同一個 SQLite transaction 中清空購物車；未知購物車回傳 404，空購物車回傳 400，欄位不符回傳 422。訂單 response 包含 `id`、`created_at`、`total` 與商品快照 `items`；配送姓名與地址會保存於資料庫 payload。
-
-## Demo 故障卡與結帳故障注入
-
-`/api/demo-faults` 是單一 Uvicorn process 內的記憶體控制 API。GET、POST、DELETE 成功都回傳相同格式：
+`/api/demo-faults` is implemented by the order service and proxied by the gateway. GET, POST, and DELETE share this response shape:
 
 ```json
 {
@@ -55,59 +63,42 @@
     {"fault_id": "database_write_lock", "title": "資料庫寫入鎖", "description": "..."},
     {"fault_id": "checkout_delay", "title": "結帳延遲", "description": "..."}
   ],
-  "active": {
-    "fault_id": "checkout_delay",
-    "started_at": "2026-09-12T00:00:00.000Z",
-    "expires_at": "2026-09-12T00:01:00.000Z",
-    "remaining_seconds": 59.9,
-    "status": "active"
-  },
-  "lease_seconds": 60,
+  "active": null,
+  "lease_seconds": null,
   "delay_seconds": 10
 }
 ```
 
-POST body 為 `{ "fault_id": "..." }`，故障卡一次只能啟用一張；未知 ID 或多餘欄位回傳 422，已有 active、activating 或 restoring 狀態回傳 409。DELETE 不帶 body 且可重複呼叫，回傳 `active: null`。lease 固定 60 秒，以 monotonic clock 判斷期限，`expires_at` 與 `started_at` 僅供 UTC UI 顯示；期限到期前後都會先完成資源清理才允許下一次啟用。
+Only one card may be active. Unknown IDs or extra fields return 422; an active, activating, or restoring card returns 409. DELETE is idempotent and wakes delayed checkouts. Faults remain active until a manual DELETE; there is no automatic lease or expiry, so `lease_seconds` is `null` and an active response keeps `expires_at` and `remaining_seconds` as `null` while reporting `started_at` and `status`. Process shutdown releases the database-lock connection and clears the in-memory fault. `checkout_exception` raises after real order and operation writes but before commit, so the order transaction rolls back. `database_write_lock` owns a dedicated SQLite connection and `BEGIN IMMEDIATE` for the order database. `checkout_delay` waits asynchronously for up to 10 seconds per checkout request and can be released by DELETE or process shutdown.
 
-三張卡的行為如下：`checkout_exception` 在兩個 checkout transaction 的實際 order/cart 寫入後、commit 前 raise `RuntimeError`，因此整筆 transaction rollback；`database_write_lock` 由專用 thread 建立並持有自己的 SQLite connection 與 `BEGIN IMMEDIATE`，成功取得後才回報 active，取得失敗會釋放並回傳錯誤；`checkout_delay` 在兩個 checkout 入口的 transaction 前以非阻塞方式等待 10 秒，DELETE 或自動清理會喚醒等待中的 request。故障 request 的 log 只記 fault ID、method、path、status 與 duration，不記 request body。
+## Runtime configuration
 
-SQLite 預設使用 `/data/shop.db`，由 Compose 的 `shop-data` named volume 保存。商品只在資料庫第一次初始化時種子一次；重啟不會重新加入已刪除商品，既有 orders 會保留自己的商品快照。
+The gateway reads:
 
-## 架構與執行
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CATALOG_URL` | `http://catalog:8000` | Catalog service URL |
+| `CART_URL` | `http://cart:8000` | Cart service URL |
+| `ORDER_URL` | `http://order:8000` | Order service URL |
 
-- FastAPI 負責商品、購物車與訂單路由及 schema 驗證。
-- `/data/shop.db` 由 `shop-data` named volume 保存。
-- `/logs/app.log` 由獨立的 `shop-logs` named volume 保存。
-- 直接 API 與 Swagger UI 使用 `http://localhost:8000`；商店頁面經 Nginx 的 API proxy 使用 `http://localhost:8080/api`。
-- 本專案是本機購物 demo，商品寫入 API 無 auth，沒有管理介面、登入權限或金流。
+The order service also reads `ORDER_DB_PATH` (falling back to `DB_PATH`, then `/data/order.db`) and `LEGACY_DB_PATH` (default `/legacy/shop.db`). Python dependencies remain the versions declared in `pyproject.toml` and `uv.lock`; the service-to-service client uses only the Python standard library.
 
-## 依賴與容器環境
+## Application logging
 
-Backend 使用 Python 3.12。`pyproject.toml` 宣告 FastAPI 與 Uvicorn，`uv.lock` 固定完整依賴樹；Docker image 內使用 uv 0.12.13，執行 `uv sync --frozen --no-dev --no-cache` 建立環境，應用程式以非 root 的 `app` 使用者執行。
+The `shop` logger defaults to `LOG_LEVEL=INFO`; `LOG_DIR` defaults to `/logs`. Each application record goes to stdout and UTF-8 `app.log` with UTC ISO-8601 millisecond timestamp, level, logger name, and message. At UTC midnight, `app.log` rotates on the next record to `app.log.YYYY-MM-DD`, retaining seven backups.
 
-本機要依照 lock 安裝執行所需依賴（不含 dev dependencies）時，在 `backend/` 執行：
+Gateway, catalog, cart, and order request middleware record method, path without query, status, and duration in milliseconds. Unexpected exceptions are logged with traceback and raised again. Request bodies, names, addresses, and tokens are not logged. Logging initialization errors are printed and allowed to fail startup; the application logger does not reconfigure Uvicorn or the root logger globally.
+
+## Local commands
+
+From `shop-web/backend/`, the repository environment can be installed with the locked dependencies:
 
 ```sh
 uv sync --frozen --no-dev
 ```
 
-`requirements.txt` 由 lock 匯出，檔案開頭記錄產生方式。更新 `pyproject.toml` 並重新鎖定後，在 `backend/` 執行：
+Production build, the ten existing integration tests, real HTTP service/fault recovery, checkout retries, and legacy row preservation have been verified. See `../docs/CHANGELOG.md` for exact results and limitations.
 
-```sh
-uv export --frozen --format requirements.txt --no-dev --no-hashes --output-file requirements.txt
-```
+The frontend uses the cart CRUD and cart checkout APIs. Only the cart ID is kept in `localStorage`; legacy cart contents are imported before the old key is removed. Network errors and HTTP 5xx retain the original checkout payload and idempotency key for retry.
 
-## Application logging
-
-`shop` logger 預設使用 `LOG_LEVEL=INFO`，logging 目錄由 `LOG_DIR` 設定，預設為 `/logs`。每筆 application log 同時輸出到 stdout 與 UTF-8 編碼的 `app.log`；格式為 UTC ISO-8601 毫秒 timestamp、level、logger name 與訊息。`app.log` 以 UTC 每日午夜輪替，輪替檔名為 `app.log.YYYY-MM-DD`，保留 7 份備份；跨過午夜後由下一筆記錄觸發輪替。
-
-服務啟動、資料庫 migration、HTTP request（method、path、status、duration_ms）與未預期例外都會記錄；request path 不含 query，例外 traceback 不記錄 request body（包含姓名、地址與 token）。`LOG_LEVEL` 或 `LOG_DIR` 設定無效時，logging 初始化會輸出錯誤並讓啟動失敗；Uvicorn/root logger 不由 application logger 改寫。
-
-從 `shop-web/` 執行：
-
-```sh
-make up
-make test
-```
-
-目前已完成預設 8080/8000 環境驗證：兩個 containers 建置與重建成功，10 項 backend 整合測試全部通過，`make smoke` 及商品、購物車、結帳 API 流程通過，containers 均為 healthy，OpenAPI 含 10 個 paths 與 `ProductResponse`、`CartResponse`、`OrderResponse` schemas。另以 isolated backend image 實測三張 demo fault、兩種 rollback、10 秒 delay/DELETE 喚醒、SQLite lock 約 10.18 秒 timeout 與清理；backend restart 後 fault inactive 且寫入恢復，log 含 traceback、500 status 與 fault ID。Chrome CDP 已實測事件頁真實 DOM 啟用/解除並取得 desktop/mobile 截圖；visual review 確認 desktop 三卡完整、390px mobile 單欄無溢出，`main.py`/`demo_faults.py` workspace 與 container hash 一致，前端部署 asset 為本次 production build。`checkout_delay` 的 TTL 自動喚醒已驗證，`database_write_lock` 的 60 秒自動到期尚未單獨驗證。前端仍以 `localStorage` 保存購物袋，未串接 cart CRUD 或 cart checkout API。
+Cart reads return HTTP 503 when catalog lookup fails, preserving existing items. An abort received before prepare creates a durable aborted operation; a delayed prepare replays that cancellation without reserving the cart.

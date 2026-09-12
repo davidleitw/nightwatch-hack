@@ -13,6 +13,7 @@ import sys
 from datetime import datetime, timezone
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
+from time import perf_counter
 
 
 LOGGER_NAME = "shop"
@@ -129,3 +130,22 @@ def shutdown_logging() -> None:
     """Flush and close only handlers created by ``configure_logging``."""
 
     _close_owned_handlers()
+
+
+async def log_service_request(request, call_next):
+    """Record catalog/cart HTTP outcomes without bodies or query strings."""
+    started = perf_counter()
+    path = request.url.path.replace("\r", r"\r").replace("\n", r"\n")
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    except Exception:
+        logger.exception("unexpected request error method=%s path=%s", request.method, path)
+        raise
+    finally:
+        logger.info(
+            "request method=%s path=%s status=%s duration_ms=%.2f",
+            request.method, path, status, (perf_counter() - started) * 1000,
+        )
