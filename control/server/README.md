@@ -6,22 +6,23 @@ Graph 功能行為、設定預設值與操作限制統一以 [Guard Room README]
 
 ## 本機開發
 
-從 repo 根目錄執行：
+一般部署從 repo 根目錄執行 `./guardroom/restart.sh`，使用 Docker Compose，預設 port 9999。
+若需 reload 開發，可先用 `./guardroom/restart.sh --close` 停止容器，再從 repo 根目錄執行：
 
 ```sh
 cd control/server
 uv sync --locked
-uv run uvicorn main:app --reload --host 127.0.0.1 --port 8001
+uv run uvicorn main:app --reload --host 127.0.0.1 --port 9999
 ```
 
-啟動後可開啟 `http://127.0.0.1:8001/docs`，或讀取 `/openapi.json` 查看實際 API 定義。
+啟動後可開啟 `http://127.0.0.1:9999/docs`，或讀取 `/openapi.json` 查看實際 API 定義。
 背景啟動／重啟方式、config 路徑與多 instance 限制見 Guard Room README。
 
 ## 程式模組
 
 | 檔案 | 責任 |
 | --- | --- |
-| [main.py](main.py) | App 組裝、生命週期與背景排程、graph／歷史查詢路由 |
+| [main.py](main.py) | App 組裝、生命週期與背景排程、graph／歷史查詢、readiness 路由 |
 | [graph_state.py](graph_state.py) | Config 驗證、JSONL 讀取、事件去重、指標與健康判定、live checkpoint |
 | [graph_history.py](graph_history.py) | 原子 JSON 寫入、歷史保存與清理、索引、分頁及時間選取 |
 | [logs.py](logs.py) | Console log 驗證、HTTP 接收、SSE log 廣播 |
@@ -34,7 +35,8 @@ uv run uvicorn main:app --reload --host 127.0.0.1 --port 8001
 
 ## 調查開發設定
 
-Investigation manager 預設將 session 存在 `../.data/investigations.sqlite3`。
+本機 Investigation manager 預設將 session 存在 `../.data/investigations.sqlite3`；
+Compose 則設定為 state volume 內的 `/app/guardroom/.run/investigations.sqlite3`。
 可用 `NIGHTWATCH_INVESTIGATION_DB` 指定其他檔案，並以 `NIGHTWATCH_GRAPH_URL`
 指定操作端設定的 graph 來源。
 

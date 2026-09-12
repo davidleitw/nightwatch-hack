@@ -52,7 +52,7 @@ Descriptions and parameter schemas are passed as framework function tools.
 
 ```sh
 bash control/run-agent.sh --describe-context
-bash control/run-agent.sh --graph-url http://127.0.0.1:8001/api/graph --describe-context
+bash control/run-agent.sh --graph-url http://127.0.0.1:9999/api/graph --describe-context
 ```
 
 This reads the graph once to discover nodes and makes no model request. The opening

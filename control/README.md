@@ -69,7 +69,7 @@ api_limit_reached 與 truncated；沒有符合項目不表示沒有故障。
 bash control/run-agent.sh --describe-context
 bash control/run-agent.sh --model
 # 指定來源或明確覆寫既有環境中的模型：
-bash control/run-agent.sh --graph-url http://127.0.0.1:8001/api/graph --model gpt-6-astra
+bash control/run-agent.sh --graph-url http://127.0.0.1:9999/api/graph --model gpt-6-astra
 ```
 
 `--describe-context` 只讀本機 API 並列印模型實際會收到的 prompt／工具／開場。
@@ -84,7 +84,7 @@ CLI 不執行此背景偵測。
 
 | 環境變數 | 預設與優先序 |
 | --- | --- |
-| `NIGHTWATCH_GRAPH_URL` | `http://127.0.0.1:8001/api/graph`；CLI `--graph-url` 優先 |
+| `NIGHTWATCH_GRAPH_URL` | `http://127.0.0.1:9999/api/graph`；CLI `--graph-url` 優先 |
 | `NIGHTWATCH_LLM_MODEL` | `gpt-6-astra`；CLI `--model MODEL` 優先 |
 | `NIGHTWATCH_LLM_API_KEY`／`OPENAI_API_KEY` | 前者優先；不寫入 prompt 或日誌 |
 | `NIGHTWATCH_LLM_ENDPOINT` | `https://api.openai.com/v1/responses` |
@@ -94,7 +94,7 @@ CLI 不執行此背景偵測。
 Astra 的模型 ID 與 Responses tool calling 依據
 [OpenAI 模型指南](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6-astra)。
 
-若 8001 的 `/api/graph` 有回應但 `/api/graph/snapshots` 回 404，需更新／重啟該服務，
+若 9999 的 `/api/graph` 有回應但 `/api/graph/snapshots` 回 404，需更新／重啟該服務，
 使其載入目前 `control/server/main.py`。只修改磁碟上的 agent 程式不會更新已啟動的程序。
 
 ## 明確選擇錄影／預覽
@@ -102,7 +102,7 @@ Astra 的模型 ID 與 Responses tool calling 依據
 ```sh
 bash control/run-agent.sh --replay-model
 bash control/run-agent.sh --fixture ../contracts/fixtures/catalog_pool_leak --model gpt-6-astra
-bash control/run-agent.sh --graph-url 'http://127.0.0.1:8001/api/graph?state=problem' --describe-context
+bash control/run-agent.sh --graph-url 'http://127.0.0.1:9999/api/graph?state=problem' --describe-context
 ```
 
 錄影模式只提供錄下的 history、detail、find_traces、get_trace 四個工具；

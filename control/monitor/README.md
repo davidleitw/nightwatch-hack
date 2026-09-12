@@ -172,7 +172,7 @@ import logging
 from monitor import GuardRoomSink, GuardRoomSinkConfig, MonitorConfig, MonitorRuntime, monitor
 
 sink = GuardRoomSink(GuardRoomSinkConfig(
-    endpoint="http://127.0.0.1:8001/api/logs",
+    endpoint="http://127.0.0.1:9999/api/logs",
 )).start()
 runtime = MonitorRuntime(sinks=(sink,))
 
@@ -212,5 +212,11 @@ close 回傳 True 代表 worker 已結束，不保證所有事件送達，需搭
 目前 sender 使用記憶體 queue，無磁碟 spool／重啟重播。Guard Room HTTP 成功表示
 接收端已將事件與 live graph checkpoint 寫入檔案，不保證 console 已顯示或已產生歷史快照。
 Docker 裡的 127.0.0.1 是容器自己，endpoint 必須設定為該環境可達的 Guard Room 位址。
+HTTP sink 的預設 endpoint 已改為 `http://127.0.0.1:9999/api/logs`；
+舊程式若明確寫死 8001，需要同步修改，既有程序需重啟才會載入新的預設值。
+跨容器可使用共用 Docker network 上的 `http://guardroom:9999/api/logs`；
+使用 Docker Desktop 的 host gateway 時，可依環境設定 `http://host.docker.internal:9999/api/logs`，
+但須確認能連到 host 的 localhost 發布埠。不要把 host 的 127.0.0.1 當成容器間位址。
 Shop-web 預設透過 Compose 共用的 `control/tmp/monitor.jsonl` 讓 Guard Room 讀取，
-沒有自動啟用 HTTP sink；兩條來源共用 `(monitor_id, event_id)` 去重。
+沒有自動啟用 HTTP sink，因此不需要改 Shop monitor 的 port 或事件格式；
+兩條來源共用 `(monitor_id, event_id)` 去重。

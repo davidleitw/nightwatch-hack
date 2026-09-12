@@ -14,7 +14,7 @@ from .models import MonitorEvent
 
 @dataclass(frozen=True)
 class GuardRoomSinkConfig:
-    endpoint: str = "http://127.0.0.1:8001/api/logs"
+    endpoint: str = "http://127.0.0.1:9999/api/logs"
     batch_size: int = 50
     flush_interval_seconds: float = 0.5
     queue_capacity: int = 1000

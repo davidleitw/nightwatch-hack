@@ -5,10 +5,12 @@ from contextlib import asynccontextmanager, suppress
 import logging
 import os
 from pathlib import Path
+from time import monotonic
 from typing import Literal
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from logs import LogHub, create_log_router
 from graph_state import GraphStore
@@ -127,6 +129,7 @@ async def lifespan(app):
     logs, cursor = store.read_file()
     store.commit(logs, cursor)
     store.history.save(store.snapshot)
+    app.state.last_history_success = monotonic()
 
     async def follow_logs():
         while True:
@@ -143,6 +146,7 @@ async def lifespan(app):
             await asyncio.sleep(store.config.history.interval_seconds)
             try:
                 store.history.save(store.snapshot)
+                app.state.last_history_success = monotonic()
             except Exception:
                 logging.getLogger(__name__).exception("Graph history archive failed; retrying next interval")
 
@@ -166,6 +170,19 @@ app = FastAPI(
 )
 log_hub = LogHub()
 app.include_router(create_log_router(log_hub, include_events=False))
+
+
+@app.get("/health/ready", summary="Check Guard Room snapshot processing, independent of monitored node health")
+async def ready():
+    store = app.state.graph_store
+    now = monotonic()
+    checks = {
+        "graph_updates": now - store.last_commit_monotonic <= 10,
+        "history_updates": now - app.state.last_history_success <= max(10, 3 * store.config.history.interval_seconds),
+    }
+    healthy = all(checks.values())
+    return JSONResponse({"status": "ok" if healthy else "degraded", "checks": checks},
+                        status_code=200 if healthy else 503)
 
 
 class SnapshotEntry(BaseModel):

@@ -65,7 +65,7 @@ export async function setupConnection(source) {
       location.href = url.href;
     };
   }
-  $('control-url').value = config?.upstream || 'http://127.0.0.1:8001';
+  $('control-url').value = config?.upstream || 'http://127.0.0.1:9999';
   $('control-url').addEventListener('input', startupCommand);
   startupCommand();
   $('check-connection').onclick = async () => {

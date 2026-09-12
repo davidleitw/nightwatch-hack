@@ -49,10 +49,10 @@ live SSE 的 incident revision 使用持久化 cursor；相同 run 可重播，�
 
 ```sh
 # 預設關閉其他前端 API 的假資料
-.venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8001
+.venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 9999
 
 # 明確啟用假資料與記憶體模擬操作
-NIGHTWATCH_MOCK_DATA=1 .venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8001
+NIGHTWATCH_MOCK_DATA=1 .venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 9999
 ```
 
 不使用 `--reload`。以一個 worker 執行；模擬狀態存在該程序的記憶體，重啟即重置。

@@ -60,7 +60,7 @@ the manager; a second process must fail clearly rather than recover a live task.
 The SQLite active constraint is still needed even with the process lock.
 
 `NIGHTWATCH_GRAPH_URL` selects the source URL, default
-`http://127.0.0.1:8001/api/graph`. It is operator configuration, never POST input.
+`http://127.0.0.1:9999/api/graph`. It is operator configuration, never POST input.
 Use the existing GraphAPI projection and actual investigate() function. Do not
 mix the old recording with new graph evidence. The real runner uses the existing
 model environment configuration and English prompts. The subsequently authorized

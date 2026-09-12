@@ -13,7 +13,7 @@ from mock_control import MockControl
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=4173)
-    parser.add_argument('--control-port', type=int, default=8001)
+    parser.add_argument('--control-port', type=int, default=9999)
     parser.add_argument('--control-url', default=os.environ.get('NIGHTWATCH_CONTROL_URL'),
                         help='HTTP(S) control base URL; defaults to the local --control-port')
     parser.add_argument('--mock', action='store_true', help='Explicit local simulation; no upstream requests')

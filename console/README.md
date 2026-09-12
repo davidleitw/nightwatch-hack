@@ -10,7 +10,7 @@
 
 ```sh
 python3 console/build.py
-python3 -B console/serve.py --port 4173 --control-url http://127.0.0.1:8001
+python3 -B console/serve.py --port 4173 --control-url http://127.0.0.1:9999
 ```
 
 - 事故錄影：<http://127.0.0.1:4173/?source=recording#topology>
@@ -43,7 +43,7 @@ python3 -B console/serve.py --port 4174 --mock
 接真實後端時先停止模擬服務，再執行：
 
 ```sh
-python3 -B console/serve.py --port 4174 --control-url http://127.0.0.1:8001
+python3 -B console/serve.py --port 4174 --control-url http://127.0.0.1:9999
 ```
 
 亦可設定 `NIGHTWATCH_CONTROL_URL`；命令列 `--control-url` 優先。舊的 `--control-port` 仍可用，未指定 URL 時才生效。網址可用 HTTP(S) 與路徑前綴，不接受網址內帳密、query 或 fragment。填入的是**前端伺服器可達的 control base URL**，不是購物網站首頁，也不是完整 `/api/state` URL。

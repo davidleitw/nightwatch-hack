@@ -123,7 +123,7 @@ Logger 本身先過濾掉的訊息無法由 monitor 補回，例如 `LOG_LEVEL=E
 
 ### 啟動與觀察
 
-從 repo 根目錄執行（需 uv、curl、lsof、Docker）：
+從 repo 根目錄執行（Guard Room 需 Docker Engine／Desktop、Compose v2、curl）：
 
 ```sh
 ./guardroom/restart.sh
@@ -131,12 +131,14 @@ Logger 本身先過濾掉的訊息無法由 monitor 補回，例如 `LOG_LEVEL=E
 curl http://127.0.0.1:8000/api/health
 curl http://127.0.0.1:8000/api/products
 # 等下一個一秒讀取週期
-curl http://127.0.0.1:8001/api/graph
+curl http://127.0.0.1:9999/api/graph
 ```
 
 應有 shop-health、shop-products、shop-db 三個節點和兩條 edge。
 首次啟動從 log 開頭讀，舊資料多時需數個週期追上。上述單次 curl 只驗證資料流，
 不會累積到商品列表 latency warning 所需的 20 筆，也不保證耗時超過門檻。
+Shop backend 的 port 由 shop-web 設定，上例使用其預設 8000；若已設成 8001，
+請對應修改 curl。Guard Room 改成 9999 不會改動 Shop 的 port。
 
 ## 更新頻率與多 monitor
 
@@ -157,7 +159,9 @@ curl http://127.0.0.1:8001/api/graph
 ## Config 與檔案
 
 `monitor_log`、`snapshot_path` 相對於 **config 所在目錄**，不依啟動 cwd。
-預設 checkpoint：`guardroom/.run/shop-web.graph-state.json`。
+本機開發的預設 checkpoint：`guardroom/.run/shop-web.graph-state.json`。
+Docker 內位於 `/app/guardroom/.run/shop-web.graph-state.json`，保存在 named volume，
+不是 host 的 `guardroom/.run/`。
 
 | 欄位 | 用途 |
 | --- | --- |
@@ -166,7 +170,8 @@ curl http://127.0.0.1:8001/api/graph
 | recent_logs | 去重與恢復聚合的近期 console logs |
 | file_cursor | log 路徑、device/inode、byte offset |
 
-用 `jq '.snapshot' guardroom/.run/shop-web.graph-state.json` 匯出純 graph。
+本機開發可用 `jq '.snapshot' guardroom/.run/shop-web.graph-state.json` 匯出純 graph；
+Docker 部署可直接用 `curl http://127.0.0.1:9999/api/graph` 取得最新純 graph。
 檔案含 log message，按應用日誌管理。checkpoint 損壞會讓啟動失敗，保留原檔，
 不靜默清空；首次啟動 log 不存在則仍提供 unknown 拓撲。
 
@@ -225,8 +230,8 @@ timestamp 必須是含時區的 RFC3339；可傳 `+08:00`、`Z` 或其他明確 
 URL 的加號必須編碼為 `%2B`，前端可用 URLSearchParams；curl 範例：
 
 ```sh
-curl 'http://127.0.0.1:8001/api/graph/snapshots?limit=100'
-curl --get 'http://127.0.0.1:8001/api/graph' \
+curl 'http://127.0.0.1:9999/api/graph/snapshots?limit=100'
+curl --get 'http://127.0.0.1:9999/api/graph' \
   --data-urlencode 'timestamp=2026-09-12T13:09:58+08:00'
 ```
 
@@ -234,11 +239,57 @@ curl --get 'http://127.0.0.1:8001/api/graph' \
 前端進入歷史模式後用清單的 at 查 graph，回到即時模式就移除 timestamp。
 本次提供歷史 API，尚未修改 console 的時間軸操作。
 
-## API 與執行限制
+## Docker 操作與資料保存
 
-預設綁定 `127.0.0.1:8001`；`PORT=8002 ./guardroom/restart.sh` 可換 port。
-PID、server log、snapshot 位於 `guardroom/.run/`。script 先驗證 config 再停止舊程序，
-只停止自己啟動且命令符合的 PID；其他程式占用 port 時報錯。
+`./guardroom/restart.sh` 現在建置映像、驗證 config、重建容器並等待健康檢查。
+映像使用鎖定的 server dependencies，不需 host 安裝 Python 或 uv。
+預設 Compose project 為 `nightwatch-guardroom`，不影響 shop-web 或其他 Compose project。
+
+```sh
+./guardroom/restart.sh          # build + recreate，保留資料
+./guardroom/restart.sh --open   # 使用現有映像啟動，不重新 build
+./guardroom/restart.sh --close  # 停止，保留容器與資料
+docker compose -p nightwatch-guardroom -f guardroom/compose.yaml ps
+docker compose -p nightwatch-guardroom -f guardroom/compose.yaml logs -f guardroom
+curl http://127.0.0.1:9999/health/ready
+```
+
+Host 預設僅發布 `127.0.0.1:9999`，container 內監聽 `0.0.0.0:9999`。
+可用 `PORT=10000 ./guardroom/restart.sh` 修改 host port；container 內仍是 9999。
+Client 與 HTTP monitor 若使用自訂 port，也須明確設定 URL。
+
+| 掛載 | 用途 |
+| --- | --- |
+| host `guardroom/shop-web.config.json` → `/app/guardroom/shop-web.config.json`，唯讀 | 拓撲與聚合設定；可用 `GUARDROOM_CONFIG` 指定其他 host config |
+| host `control/tmp/` → `/app/control/tmp/`，唯讀 | 共用 Shop 的 JSONL；可用 `MONITOR_LOG_DIR` 指定已存在的 host 目錄 |
+| named volume `nightwatch-guardroom_guardroom-state` → `/app/guardroom/.run/` | live checkpoint、歷史 snapshots、investigations.sqlite3 |
+
+Config 在容器內的位置固定，相對路徑以 `/app/guardroom/` 解析。自訂 config 建議保持
+`monitor_log=../control/tmp/monitor.jsonl`、`snapshot_path=.run/...`、`history.directory=.run/...`；
+若使用其他容器路徑，必須自行增加對應掛載與寫入權限。
+Config 修改後重啟。舊 host 程序及 `guardroom/.run/`、`control/.data/` 資料不會自動遷移，
+從舊部署切換前請先停止舊程序並備份、遷移所需資料。
+
+容器重啟／重建或 `docker compose down` 不會刪除 named volume；
+**不要執行 `down -v` 或刪除該 volume，否則會刪除 graph 與調查資料，無備份無法恢復。**
+歷史快照仍依 retention 設定自動到期清理。不同 instance 可用不同的
+`GUARDROOM_PROJECT_NAME` 與 host port，避免共用 state volume。
+
+調查需要的 `NIGHTWATCH_LLM_API_KEY`／`OPENAI_API_KEY`、`NIGHTWATCH_LLM_MODEL` 等設定
+可透過 shell export 或 `guardroom/.env` 提供；不會自動載入 host 的 `control/.env`。
+預設 investigation graph URL 為容器內 `http://127.0.0.1:9999/api/graph`。
+不要將 API key 寫進 Dockerfile 或提交 `.env`。
+
+容器以 UID 10001 非 root 執行，根檔案系統唯讀，僅 state volume 與 `/tmp` 可寫；
+停用額外 Linux capabilities、禁止權限提升，並限制 512 MiB 記憶體、1 CPU、128 processes。
+`restart: unless-stopped` 處理程序退出後的重啟；Docker daemon 停止期間無法提供服務。
+
+`/health/ready` 檢查 live checkpoint 最近 10 秒內有成功提交，且 history loop 在
+`max(10, 3 × history.interval_seconds)` 秒內成功執行。正常回 200，逾時回 503。
+Shop 節點 warning／failing 不會令 Guard Room unhealthy。
+Compose 每 5 秒探測一次；**unhealthy 本身不會觸發自動重啟**，此版未加入 autoheal。
+
+## API 與執行限制
 
 必須使用 **單一 uvicorn worker**。多個 instance 各自設定不同 snapshot_path，
 不能只換 port 就共寫 checkpoint。同步檔案 I/O 適合此 demo 規模。
@@ -253,4 +304,4 @@ copytruncate 在兩次輪詢間縮短又長過原 offset 不保證偵測，建�
 
 `GET /events` 先送連線註解，新 log 送 event: log，閒置每 2 秒 ping。
 每個訂閱者最多 256 筆，落後會斷線；無 SSE id、歷史回放或補送。
-API 無身分驗證，預設僅綁定 localhost。文件：`http://127.0.0.1:8001/docs`。
+API 無身分驗證，預設僅綁定 localhost。文件：`http://127.0.0.1:9999/docs`。
