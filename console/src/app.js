@@ -11,6 +11,7 @@ const isClosed=i=>Boolean(i.closed_at)||['closed','recovered','unresolved'].incl
 const time=value=>value && Number.isFinite(Date.parse(value))?new Date(value).toISOString().replace('T',' ').replace(/\.\d+Z$/,''):'—';
 const number=(value,unit='',factor=1)=>typeof value==='number'&&Number.isFinite(value)?`${(value*factor).toLocaleString('en-US',{maximumFractionDigits:1})}${unit}`:'—';
 const source=new URLSearchParams(location.search).get('source')==='recording'?'recording':'live';
+let journal=[], journalFilter="all";
 let state=null, incidents=[], selectedNode=null, selectedIncident=null, incidentDetail=null, recording=null;
 let zoom=1, autoFit=true, filterStatus='all', listNote='', stream=null, retryTimer=null, refreshTimer=null, freshnessTimer=null, refreshBusy=false, refreshAgain=false;
 let lastActivity=0, retryDelay=1000, cursor=0, detailRequest=0, shapeKey='', snapshotWidth=0, snapshotHeight=0;
@@ -27,10 +28,10 @@ function renderGraph(){
   if(shapeKey!==signature){shapeKey=signature;autoFit=true;}
   const rows=caps.map(n=>n.layout.row), cols=caps.map(n=>n.layout.col);
   const minRow=Math.min(0,...rows), minCol=Math.min(0,...cols);
-  snapshotWidth=(Math.max(0,...cols)-minCol+1)*229+24;
-  snapshotHeight=(Math.max(0,...rows)-minRow+1)*118+16;
-  const positions=new Map(caps.map(n=>[n.id,{x:24+(n.layout.col-minCol)*229,y:14+(n.layout.row-minRow)*118}]));
-  if(autoFit)zoom=Math.min(1.15,Math.max(.85,($('graph-viewport').clientWidth-15)/snapshotWidth));
+  snapshotWidth=(Math.max(0,...cols)-minCol+1)*132+24;
+  snapshotHeight=(Math.max(0,...rows)-minRow+1)*132+16;
+  const positions=new Map(caps.map(n=>[n.id,{x:24+(n.layout.col-minCol)*132,y:14+(n.layout.row-minRow)*132}]));
+  if(autoFit)zoom=Math.min(1.15,Math.max(.55,($('graph-viewport').clientWidth-15)/snapshotWidth));
   const search=$('node-search').value.toLowerCase().trim(), filter=$('health-filter').value;
   const matches=new Set(graph.nodes.filter(n=>(!search||n.id.toLowerCase().includes(search))&&(filter==='all'||n.status===filter)).map(n=>n.id));
   $('total-nodes').textContent=graph.nodes.length;$('failing-count').textContent=graph.nodes.filter(n=>n.status==='failing').length;$('warning-count').textContent=graph.nodes.filter(n=>n.status==='warning').length;
@@ -44,9 +45,9 @@ function renderGraph(){
   $('zoom-value').textContent=`${Math.round(zoom*100)}%`;
   let edgeHTML='<defs><marker id="arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0L7 3.5L0 7" fill="none" stroke="#9cb48c"/></marker></defs>';
   graph.edges.forEach((e,index)=>{const a=positions.get(e.from),b=positions.get(e.to);let d;
-    if(a.y===b.y && Math.abs(a.x-b.x)<230){const right=a.x<b.x;d=`M${a.x+(right?205:0)} ${a.y+48}H${b.x+(right?0:205)}`;}
-    else if(a.y===b.y){const lane=a.y+103+(index%3)*4;d=`M${a.x+102} ${a.y+94}V${lane}H${b.x+102}V${b.y+94}`;}
-    else{const down=b.y>a.y,start=a.y+(down?94:0),end=b.y+(down?0:94),lane=down?end-10-(index%3)*4:start-10-(index%3)*4;d=`M${a.x+102} ${start}V${lane}H${b.x+102}V${end}`;}
+    if(a.y===b.y && Math.abs(a.x-b.x)<133){const right=a.x<b.x;d=`M${a.x+(right?120:0)} ${a.y+53}H${b.x+(right?0:120)}`;}
+    else if(a.y===b.y){const lane=a.y+116+(index%3)*4;d=`M${a.x+60} ${a.y+106}V${lane}H${b.x+60}V${b.y+106}`;}
+    else{const down=b.y>a.y,start=a.y+(down?106:0),end=b.y+(down?0:106),lane=down?end-10-(index%3)*4:start-10-(index%3)*4;d=`M${a.x+60} ${start}V${lane}H${b.x+60}V${end}`;}
     edgeHTML+=`<path class="edge ${e.from===selectedNode||e.to===selectedNode?'related':''} ${!e.observed?'unobserved':''} ${(!matches.has(e.from)&&!matches.has(e.to))?'dim':''}" d="${d}" marker-end="url(#arrow)"><title>${esc(e.from)} → ${esc(e.to)} · ${esc(e.kind)} · ${e.observed?'已觀測':'近期未觀測'} · ${esc(number(e.rps,' req/s'))}</title></path>`;
   });$('edges').innerHTML=edgeHTML;
   $('nodes').innerHTML=graph.nodes.map(n=>{const p=positions.get(n.id);return `<button class="graph-node ${esc(n.kind)} ${esc(n.assessment)} ${n.id===selectedNode?'selected':''} ${matches.has(n.id)?'':'dim'}" style="left:${p.x}px;top:${p.y}px" data-node="${esc(n.id)}" aria-label="選取 ${esc(n.id)}" aria-pressed="${n.id===selectedNode}"><span class="node-name">${esc(n.id)}</span><span class="node-meta"><span class="${esc(n.status)}"><i class="dot ${esc(n.status)}"></i>${statusNames[n.status]}</span><span class="node-assessment">${n.assessment==='unassessed'?kinds[n.kind]||n.kind:assessmentNames[n.assessment]}</span></span><span class="node-value">${esc(primary(n))}</span></button>`;}).join('');
@@ -86,13 +87,20 @@ async function selectIncident(id){
   if(request!==detailRequest)return;if(detail.id!==id)throw new Error('事故詳情 ID 與要求的事故不一致。');incidentDetail=detail;renderIncidentDetail();
  }catch(e){if(request!==detailRequest)return;error('detail',e.message);renderIncidentDetail();}
 }
-function route(){const hash=location.hash.slice(1), parts=hash.split('/');const list=parts[0]==='incidents';$('topology-view').hidden=list;$('incidents-view').hidden=!list;$('nav-topology').setAttribute('aria-current',list?'false':'page');$('nav-incidents').setAttribute('aria-current',list?'page':'false');$('page-title').textContent=list?'事故列表':'服務拓樸';$('page-description').textContent=list?'查看事故進度、偵測來源與已記錄的證據。':'從服務關聯、量測與判定，掌握系統狀態。';let id=null;try{id=list&&parts[1]?decodeURIComponent(parts[1]):null;}catch{error('route','事故網址編碼不合法。');}if(id!==selectedIncident)selectIncident(id);if(!list){renderGraph();renderNode();}renderList();}
-function adopt(next){validateState(next);if(state?.run.id===next.run.id && (state.incident?.revision||0)>(next.incident?.revision||0))return;
- const oldRun=state?.run.id;if(oldRun && oldRun!==next.run.id){cursor=0;selectedNode=null;shapeKey='';}
+function route(){const hash=location.hash.slice(1), parts=hash.split('/');const list=parts[0]==='incidents';$('topology-view').hidden=list;$('incidents-view').hidden=!list;$('nav-topology').setAttribute('aria-current',list?'false':'page');$('nav-incidents').setAttribute('aria-current',list?'page':'false');$('page-title').textContent=list?'事故列表':'調查工作台';$('page-description').textContent=list?'查看事故進度、偵測來源與已記錄的證據。':'左側追蹤服務狀態，右側查看 Monitor 與 Agent 的調查紀錄。';let id=null;try{id=list&&parts[1]?decodeURIComponent(parts[1]):null;}catch{error('route','事故網址編碼不合法。');}if(id!==selectedIncident)selectIncident(id);if(!list){renderGraph();renderNode();}renderList();}
+function adopt(next){validateState(next);
+ if(state?.run.id===next.run.id){
+  // A cleared incident has no revision; order full states by their server time.
+  if(Date.parse(next.server_now)<Date.parse(state.server_now))return;
+  if(state.incident && next.incident && state.incident.id===next.incident.id && state.incident.revision>next.incident.revision)return;
+  // Graph SSE can advance independently while GET /api/state is in flight.
+  if(state.graph_now.seq>next.graph_now.seq)next={...next,graph_now:state.graph_now};
+ }
+ const oldRun=state?.run.id;if(oldRun && oldRun!==next.run.id){cursor=0;selectedNode=null;shapeKey='';journal=[];}
  state=next;cursor=Math.max(cursor,next.incident?.revision||0);if(!state.graph_now.nodes.some(n=>n.id===selectedNode))selectedNode=state.graph_now.nodes.find(n=>n.assessment==='origin')?.id||state.graph_now.nodes.find(n=>n.status==='failing')?.id||state.graph_now.nodes[0]?.id||null;
- renderGraph();renderNode();renderCurrent();renderList();if(selectedIncident===next.incident?.id){incidentDetail=next.incident;renderIncidentDetail();}
+ renderGraph();renderNode();renderCurrent();renderList();renderInvestigation();if(selectedIncident===next.incident?.id){incidentDetail=next.incident;renderIncidentDetail();}
 }
-function showRecording(seconds){try{const next=projectRecording(recording,seconds);state=null;adopt(next);incidents=next.incident?[next.incident]:[];$('replay-label').textContent=`+${seconds} 秒`;listNote='此清單只包含錄影時間當下可見的事故，並非完整歷史。';connection('錄影 · 已暫停');renderList();if(selectedIncident)selectIncident(selectedIncident);}catch(e){error('recording',e.message);}}
+function showRecording(seconds){try{const next=projectRecording(recording,seconds);journal=recording.events.filter(line=>line.event==='incident' && (typeof line.data.event.t==='number' ? line.data.event.t<=seconds : Date.parse(line.data.event.occurred_at)<=Date.parse(next.server_now))).map(line=>({kind:'incident',data:line.data.event}));state=null;adopt(next);incidents=next.incident?[next.incident]:[];$('replay-label').textContent=`+${seconds} 秒`;listNote='此清單只包含錄影時間當下可見的事故，並非完整歷史。';connection('錄影 · 已暫停');renderList();if(selectedIncident)selectIncident(selectedIncident);}catch(e){error('recording',e.message);}}
 async function refreshLive(){
  if(refreshBusy){refreshAgain=true;return;}refreshBusy=true;$('refresh').disabled=true;
  try{const results=await Promise.allSettled([readJSON('/api/state'),readJSON('/api/incidents')]);
@@ -110,19 +118,53 @@ function connect(){
  const receive=handler=>event=>{if(stream!==current)return;lastActivity=Date.now();retryDelay=1000;connection('即時連線');try{handler(JSON.parse(event.data));error('stream');}catch(e){error('stream',`SSE 資料錯誤：${e.message}`);scheduleRefresh();}};
  current.addEventListener('state',receive(data=>{adopt(data);error('state');}));
  current.addEventListener('graph',receive(data=>{if(!state){scheduleRefresh();return;}validateGraph(data,state.capabilities);if(data.seq>state.graph_now.seq){state.graph_now=data;renderGraph();renderNode();}}));
- current.addEventListener('incident',receive(data=>{if(!state || data.run_id!==state.run.id){scheduleRefresh();return;}if(!Number.isInteger(data.revision)||!Number.isInteger(data.base_revision))throw new Error('incident revision 不合法。');if(data.revision<=cursor)return;cursor=data.revision;scheduleRefresh();}));
- current.addEventListener('run',receive(()=>{cursor=0;state=null;shapeKey='';scheduleRefresh();}));
- for(const name of ['ping','faults','readiness','log'])current.addEventListener(name,receive(()=>{}));
+ current.addEventListener('incident',receive(data=>{if(!state || data.run_id!==state.run.id){scheduleRefresh();return;}if(!Number.isInteger(data.revision)||!Number.isInteger(data.base_revision))throw new Error('incident revision 不合法。');appendJournal('incident',data.event);if(data.revision<=cursor)return;cursor=data.revision;scheduleRefresh();}));
+ current.addEventListener('run',receive(()=>{cursor=0;state=null;shapeKey='';journal=[];renderInvestigation();scheduleRefresh();}));
+ current.addEventListener('log',receive(data=>appendJournal('monitor',data)));
+ for(const name of ['ping','faults','readiness'])current.addEventListener(name,receive(()=>{}));
  current.onerror=()=>{if(stream===current)reconnect();};
 }
 $('source').value=source;$('source').onchange=e=>{const url=new URL(location.href);url.searchParams.set('source',e.target.value);location.href=url.href;};
 $('refresh').onclick=async()=>{if(source==='recording'){showRecording(Number($('replay-time').value));}else{await refreshLive();if(selectedIncident)selectIncident(selectedIncident);}};
 $('node-search').oninput=renderGraph;$('health-filter').onchange=renderGraph;
 $('incident-search').oninput=renderList;document.querySelectorAll('[data-status]').forEach(button=>button.onclick=()=>{filterStatus=button.dataset.status;document.querySelectorAll('[data-status]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));renderList();});
-function changeZoom(amount){autoFit=false;zoom=Math.min(1.5,Math.max(.85,zoom+amount));renderGraph();}
+function changeZoom(amount){autoFit=false;zoom=Math.min(1.5,Math.max(.55,zoom+amount));renderGraph();}
 $('zoom-out').onclick=()=>changeZoom(-.1);$('zoom-in').onclick=()=>changeZoom(.1);$('fit').onclick=()=>{autoFit=true;renderGraph();};
 $('replay-time').oninput=e=>showRecording(Number(e.target.value));
 window.addEventListener('hashchange',route);window.addEventListener('resize',()=>{if(autoFit&&!$('topology-view').hidden)renderGraph();});
 window.addEventListener('pagehide',()=>{stream?.close();clearTimeout(retryTimer);clearTimeout(refreshTimer);clearInterval(freshnessTimer);});
 async function start(){route();if(source==='recording'){$('recording').hidden=false;try{recording=await loadRecording();showRecording(60);if(selectedIncident)selectIncident(selectedIncident);}catch(e){error('recording',`錄影載入失敗：${e.message}`);connection('錄影載入失敗','disconnected');}}else{await refreshLive();connect();freshnessTimer=setInterval(()=>{const age=Date.now()-lastActivity;if(!lastActivity)return;if(age>=15000){connection('disconnected · 資料未更新','disconnected');reconnect();}else if(age>=6000)connection('stale · 資料延遲','stale');},1000);}}
 start().catch(e=>error('startup',e.message));
+
+function appendJournal(kind,data){
+ if(kind==='monitor'){
+  if(data?.schema_version!=='nightwatch.log.v1'||!data.event_id||!data.monitor_id||typeof data.message!=='string'||!Number.isFinite(Date.parse(data.occurred_at))||!['TRACE','DEBUG','INFO','WARN','ERROR','FATAL'].includes(data.level)||!Array.isArray(data.refs?.node_ids))throw new Error('Monitor log 不符合 nightwatch.log.v1 草案。');
+ }else if(!data?.id||!data.actor?.kind||!data.timeline||!Number.isFinite(Date.parse(data.occurred_at)))throw new Error('調查事件缺少必要欄位。');
+ const key=kind==='monitor'?JSON.stringify([data.monitor_id,data.event_id]):data.id;
+ if(journal.some(row=>row.kind===kind&&(kind==='monitor'?JSON.stringify([row.data.monitor_id,row.data.event_id]):row.data.id)===key))return;
+ journal.push({kind,data});renderInvestigation();
+}
+function eventSource(row){return row.kind==='monitor'?'monitor':['model','tool'].includes(row.data.actor?.kind)?'agent':'system';}
+function locateInvestigation(id){
+ if(!state?.graph_now.nodes.some(n=>n.id===id)){error('locate',`圖外來源：${id} 不在目前的服務節點清單。`);return;}
+ error('locate');selectedNode=id;$('node-search').value='';$('health-filter').value='all';renderGraph();renderNode();
+ for(const n of $('nodes').querySelectorAll('[data-node]'))if(n.dataset.node===id)n.scrollIntoView({block:'nearest',inline:'center'});
+}
+function bindInvestigationNodes(){document.querySelectorAll('[data-investigation-node]').forEach(b=>b.onclick=()=>locateInvestigation(b.dataset.investigationNode));}
+function nodeLink(id){return `<button class="node-link" data-investigation-node="${esc(id)}">${esc(id)} ↗</button>`;}
+function renderInvestigation(){
+ const i=state?.incident,root=i?.hypothesis?.root_cause;
+ $('investigation-phase').innerHTML=i?badge(i):'';
+ $('investigation-summary').innerHTML=`<div class="report-kicker">${root?'AI 結論':'目前調查'}</div><h3>${esc(root?.summary_zh||i?.detection?.summary_zh||'等待事故資料')}</h3><div class="summary-meta">${root?.node?nodeLink(root.node):''}<span>${esc(i?.id||'尚無事故')}</span></div>`;
+ const rows=journal.filter(row=>journalFilter==='all'||eventSource(row)===journalFilter);
+ $('journal-count').textContent=`${rows.length} 筆`;
+ $('journal-note').textContent=source==='recording'?'依錄影接收順序 · 此錄影未包含 Monitor 原始 log':'依接收順序 · 僅保留本頁收到的事件；重新整理與斷線可能缺漏';
+ const actors={model:'模型',tool:'工具',go:'系統',operator:'操作者',grafana:'Grafana 告警'};
+ $('journal-entries').innerHTML=rows.map(row=>{const e=row.data,kind=eventSource(row),monitor=row.kind==='monitor';const nodes=e.refs?.node_ids||[];const args=e.payload?.args;const target=args?.node||args?.service;const ids=[...new Set([...nodes,...(typeof target==='string'?[target]:[])])];return `<article class="journal-entry ${kind}"><div class="journal-meta"><strong>${monitor?'Monitor':kind==='agent'?'Agent':'系統'}</strong><span>${esc(monitor?e.monitor_id:actors[e.actor.kind]||e.actor.kind)}</span><time>${esc(time(e.occurred_at).slice(11))} UTC</time></div><p>${esc(monitor?e.message:e.timeline.summary_zh||e.timeline.title||e.type)}</p><div class="journal-links">${ids.map(nodeLink).join('')}${monitor?`<span class="log-level">${esc(e.level)}</span>`:e.payload?.tool?`<span class="tool-name">${esc(e.payload.tool)}</span>`:''}</div><details><summary>${monitor?'原始 log':'事件內容'}${!monitor&&e.refs?.evidence_ids?.length?' · '+e.refs.evidence_ids.length+' 筆證據':''}</summary><pre class="raw">${esc(JSON.stringify(monitor?e:e.payload||{},null,2))}</pre></details></article>`;}).join('')||`<div class="empty">${journalFilter==='monitor'?'尚未收到 Monitor log。':'目前沒有符合來源的調查事件。'}</div>`;
+ const onset=i?.hypothesis?.timeline?.onset, propagation=i?.hypothesis?.timeline?.propagation||[], evidence=i?.evidence||[];
+ $('investigation-report').innerHTML=`<div class="report-section-label">01 ／ 因果鏈</div>${onset?`<p class="report-note">起點：${esc(onset.node)} · ${esc(onset.t)} 秒 · ${esc(onset.signal)}</p>`:''}${propagation.length?`<ol class="report-chain">${propagation.map(n=>`<li>${nodeLink(n.node)}<span>${esc(n.t)} 秒 · ${esc(({sat:'飽和度偏離',err:'錯誤率偏離',p95:'延遲偏離',up:'存活狀態偏離'})[n.signal]||n.signal)}</span></li>`).join('')}</ol><p class="report-note">相對於事故偵測時間；依 Agent 報告呈現。</p>`:'<p class="report-note">尚未提供傳播路徑。</p>'}<div class="report-section-label">02 ／ 處理建議</div><p>${esc(i?.proposal?.description_zh||'尚未提出修復建議。')}</p>${i?.proposal?.verify_zh?`<p class="report-note">驗證方式：${esc(i.proposal.verify_zh)}</p>`:''}<div class="report-section-label">03 ／ 日誌與量測證據 <span>${evidence.length} 筆</span></div>${evidence.map((e,index)=>`<details class="report-evidence"><summary><span>${String(index+1).padStart(2,'0')}</span> ${esc(e.summary_zh||e.summary||e.id)}</summary><p class="report-note">${esc(e.id)} · ${esc(e.tool||e.source||'來源未提供')}</p><pre class="raw">${esc(JSON.stringify(e,null,2))}</pre></details>`).join('')||'<p class="report-note">尚未記錄證據。</p>'}`;
+ bindInvestigationNodes();
+}
+function switchInvestigation(report){$('journal-panel').hidden=report;$('investigation-report').hidden=!report;$('show-report').setAttribute('aria-pressed',String(report));$('show-journal').setAttribute('aria-pressed',String(!report));}
+$('show-report').onclick=()=>switchInvestigation(true);$('show-journal').onclick=()=>switchInvestigation(false);
+document.querySelectorAll('[data-event-source]').forEach(button=>button.onclick=()=>{journalFilter=button.dataset.eventSource;document.querySelectorAll('[data-event-source]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));renderInvestigation();});

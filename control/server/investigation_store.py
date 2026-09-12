@@ -233,6 +233,10 @@ class InvestigationStore:
                 raise KeyError(investigation_id)
             if row["status"] != "running":
                 return self._summary(row)
+            if status in {"interrupted", "failed"}:
+                # Tool observations are persisted before the model returns.
+                # A cancelled/failed runner may still hold an empty result list.
+                evidence = json.loads(row["evidence_json"])
             closed = now()
             actual_report = self._report(investigation_id, outcome, summary_zh, row["started_at"], closed,
                                           report, evidence, limitations)

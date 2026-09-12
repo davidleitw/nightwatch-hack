@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>NightWatch · AI 事故報告預覽</title>
+<style>
+:root { color-scheme:light; --ink:#22262b; --muted:#626973; --line:#dddeda; --paper:#fcfcfa; --red:#b1373d; --amber:#946815; --blue:#315f88; --mono:ui-monospace,"SFMono-Regular",Consolas,monospace; }
+* { box-sizing:border-box; }
+body { margin:0; color:var(--ink); background:var(--paper); font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+a { color:var(--blue); text-underline-offset:3px; }
+button,input,select { font:inherit; }
+button,summary { cursor:pointer; }
+a:focus-visible,button:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visible { outline:2px solid var(--blue); outline-offset:4px; }
+[hidden] { display:none!important; }
+.app-bar { padding:17px 32px; border-bottom:1px solid var(--line); display:flex; gap:20px; align-items:center; font-size:13px; color:var(--muted); background:white; }
+.app-bar strong { color:var(--ink); font-size:18px; letter-spacing:-.5px; }
+.preview-note { margin-left:auto; font-size:12px; }
+.page { max-width:1080px; margin:auto; padding:36px 36px 64px; }
+.masthead { margin-bottom:20px; }
+.masthead-top { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-bottom:20px; }
+.kicker { font-size:16px; font-weight:600; }
+.kicker-dim { font-weight:400; color:var(--muted); }
+.case-id { font:12px/1.5 var(--mono); color:var(--muted); }
+.masthead-body { display:flex; align-items:center; gap:28px; padding-bottom:20px; border-bottom:1px solid var(--line); }
+.meta-grid { display:grid; grid-template-columns:110px minmax(240px,1fr) 175px; gap:24px; flex:1; }
+.meta-cell { display:flex; flex-direction:column; gap:5px; }
+.meta-key { font-size:12px; color:var(--muted); }
+.meta-val { font:12px/1.75 var(--mono); overflow-wrap:anywhere; }
+.stamp { display:inline-block; border:1px solid #d7afb0; color:var(--red); padding:4px 9px; font-size:12px; white-space:nowrap; border-radius:3px; }
+.ledger { display:flex; gap:24px; flex-wrap:wrap; margin:0 0 14px; }
+.stat-box { display:flex; gap:7px; align-items:baseline; text-decoration:none; color:var(--ink); }
+.stat-value { font:600 22px/1.4 var(--mono); }
+.stat-name { color:var(--muted); font-size:12px; }
+.stat-critical .stat-value,.stat-coredump .stat-value { color:var(--red); }
+.stat-warning .stat-value { color:var(--amber); }
+.stat-box:hover .stat-name { text-decoration:underline; }
+.query-block { padding:12px 0 22px; display:flex; gap:20px; align-items:baseline; }
+.query-label { font-size:12px; color:var(--muted); white-space:nowrap; }
+.query-text { font-size:15px; }
+.tab-bar { display:flex; border-bottom:1px solid var(--line); gap:28px; margin-bottom:27px; }
+.tab-btn { border:0; border-bottom:2px solid transparent; padding:11px 0; background:none; color:var(--muted); font-size:14px; }
+.tab-btn.active { color:var(--ink); border-bottom-color:var(--ink); font-weight:600; }
+.tab-btn:hover { color:var(--ink); }
+.tab-btn svg { display:none; }
+.hero { margin-bottom:36px; }
+.hero-kicker { font-size:12px; color:var(--red); font-weight:600; margin-bottom:11px; }
+.hero-conclusion { font-size:26px; line-height:1.65; font-weight:600; letter-spacing:-.3px; margin:0; max-width:36em; }
+.hero-support { margin-top:17px; }
+.hero-category { display:inline-block; font-size:12px; color:var(--muted); margin-bottom:8px; }
+.hero-category::before { content:'分類：'; }
+.hero-reasoning { display:flex; gap:20px; }
+.hero-reasoning-label { color:var(--muted); font-size:12px; flex-shrink:0; padding-top:3px; }
+.hero-reasoning p { margin:0; font-size:14px; color:#4b535c; line-height:1.85; }
+.section-label { display:flex; align-items:center; gap:14px; margin-bottom:20px; }
+.section-label-text { font-size:16px; font-weight:600; }
+.section-label-count { font-size:12px; color:var(--muted); }
+.section-label-line { height:1px; flex:1; background:var(--line); }
+.chain-rail { list-style:none; padding:0; margin:0 0 34px 10px; border-left:1px solid #cbd0cb; }
+.chain-node { position:relative; padding:0 0 23px 30px; }
+.chain-node:last-child { padding-bottom:0; }
+.chain-marker { position:absolute; left:-11px; top:1px; width:22px; background:var(--paper); font:12px/23px var(--mono); text-align:center; color:var(--muted); }
+.chain-head { display:flex; align-items:center; flex-wrap:wrap; column-gap:12px; row-gap:4px; }
+.chain-ts { font:12px/1.6 var(--mono); }
+.chain-src { font:12px/1.6 var(--mono); color:var(--muted); }
+.chain-role { font-size:11px; color:var(--muted); }
+.chain-role-root { color:var(--red); }
+.chain-count { color:var(--muted); font:12px/1.6 var(--mono); }
+.chain-evidence { margin-left:auto; font-size:12px; }
+.chain-reason { margin:6px 0 0; font-size:14px; }
+.chain-raw { margin-top:5px; }
+.chain-raw summary { font-size:12px; color:var(--muted); }
+.chain-log,.log-content { background:#f1f2ef; border:1px solid #e3e5df; padding:13px 15px; border-radius:3px; font:12px/1.8 var(--mono); white-space:pre-wrap; overflow-wrap:anywhere; margin:10px 0; }
+.diagnosis-panels { margin:0 0 34px; }
+.summary-panel,.recommendations-panel { border-top:1px solid var(--line); padding:20px 0 6px; }
+.summary-panel h4,.recommendations-panel h4 { font-size:16px; font-weight:600; margin:0 0 12px; }
+.summary-text { font-size:14px; color:#4b535c; line-height:1.85; }
+.recommendations-panel { margin-top:16px; }
+.rec-item { display:flex; gap:18px; margin:12px 0; }
+.rec-num { font:13px/25px var(--mono); color:var(--muted); }
+.rec-body { display:flex; flex-direction:column; gap:3px; }
+.rec-action { font-size:14px; font-weight:500; }
+.rec-reason { font-size:13px; color:var(--muted); }
+.section-nav { display:flex; gap:18px; flex-wrap:wrap; padding:16px 0; border-top:1px solid var(--line); }
+.nav-item { color:var(--muted); font-size:12px; text-decoration:none; }
+.nav-item:hover { color:var(--ink); text-decoration:underline; }
+.nav-count { margin-left:6px; font-family:var(--mono); }
+.report-section { border-top:1px solid var(--line); }
+.report-section:last-child { border-bottom:1px solid var(--line); }
+.section-head { display:flex; align-items:center; gap:12px; padding:16px 0; list-style:none; }
+.section-head::-webkit-details-marker,.log-entry-header::-webkit-details-marker { display:none; }
+.section-chevron,.log-chevron { display:inline-flex; color:var(--muted); }
+details:not([open])>.section-head .section-chevron,details:not([open])>.log-entry-header .log-chevron { transform:rotate(-90deg); }
+.seal { font:12px/1.6 var(--mono); }
+.section-seal { font-weight:600; }
+[data-accent=error] .section-seal,.sev-critical { color:var(--red); }
+[data-accent=warning] .section-seal,.sev-warning { color:var(--amber); }
+.sev-info,.sev-noise { color:var(--muted); }
+.section-sub { font-size:13px; color:var(--muted); }
+.section-rule { flex:1; }
+.section-stats { font:12px/1.6 var(--mono); white-space:nowrap; }
+.stat-label,.stat-sep { color:var(--muted); margin:0 4px; }
+.section-summary { color:var(--muted); font-size:13px; margin:0 0 12px 25px; }
+.section-body { padding-bottom:16px; }
+.log-entry { border-top:1px solid #e6e7e2; margin-left:25px; scroll-margin-top:20px; }
+.log-entry:target { background:#eef2f5; }
+.log-entry-header { display:flex; align-items:center; flex-wrap:wrap; gap:7px 12px; padding:12px 0; list-style:none; }
+.entry-num,.log-count { font:12px/1.6 var(--mono); color:var(--muted); }
+.match-badge { font:10px/1.6 var(--mono); color:var(--muted); }
+.entry-event-id { display:none; }
+.entry-src { font:12px/1.6 var(--mono); color:var(--muted); }
+.log-preview { flex-basis:100%; order:2; margin-left:23px; font:12px/1.75 var(--mono); overflow-wrap:anywhere; color:#535b64; }
+.log-time { margin-left:auto; font:11px/1.6 var(--mono); color:var(--muted); }
+.log-entry-body { padding:0 0 16px 23px; }
+.log-interpretation p { font-size:14px; margin:12px 0; }
+.log-annotation { border-left:2px solid #d6dbd1; padding:1px 16px; margin:18px 0; }
+.ann-header { font-size:12px; font-weight:600; }
+.ann-text { font:12px/1.8 var(--mono); color:#535b64; }
+.ann-interp { font-size:13px; }
+.log-meta { display:flex; flex-wrap:wrap; gap:12px; color:var(--muted); font:11px/1.7 var(--mono); overflow-wrap:anywhere; }
+.unannotated-tag { color:var(--muted); font-size:12px; }
+.site-footer { border-top:1px solid var(--line); }
+.footer-inner { max-width:1080px; margin:auto; padding:18px 36px; display:flex; justify-content:space-between; gap:20px; color:var(--muted); font-size:11px; }
+.footer-meta { display:flex; gap:16px; }
+.timeline-note { font-size:13px; color:var(--muted); margin:0 0 20px; }
+.timeline-tools { display:flex; align-items:center; gap:18px; padding-bottom:20px; font-size:13px; flex-wrap:wrap; }
+.timeline-tools label { display:flex; gap:10px; align-items:center; }
+.timeline-tools input,.timeline-tools select { border:1px solid #cbd0c7; border-radius:3px; background:white; padding:7px 10px; color:var(--ink); font-size:13px; }
+#tl-stats { margin-left:auto; color:var(--muted); font-size:12px; }
+.timeline-entry { border-top:1px solid var(--line); padding:13px 0; }
+.timeline-entry summary { font-size:14px; }
+.timeline-entry time { font:12px/1.7 var(--mono); color:var(--muted); margin-right:18px; }
+.timeline-entry .timeline-type { font-size:11px; margin-right:12px; }
+.timeline-entry .log-detail { padding:4px 0 0 20px; }
+.timeline-empty { color:var(--muted); padding:24px 0; }
+@media(max-width:800px) {
+ .page { padding:24px; }
+ .meta-grid { grid-template-columns:100px 1fr; gap:14px; }
+ .meta-cell:last-child { grid-column:1/-1; }
+ .masthead-body { align-items:flex-start; }
+ .hero-conclusion { font-size:23px; }
+ .ledger { gap:18px; }
+ .case-id { font-size:10px; }
+ .hero-reasoning { display:block; }
+ .hero-reasoning-label { display:block; margin-bottom:5px; }
+ .section-sub { display:none; }
+ .footer-meta { display:none; }
+ .log-time { flex-basis:100%; margin-left:23px; }
+}
+@media(max-width:540px) {
+ .app-bar { padding:12px 16px; gap:12px; flex-wrap:wrap; }
+ .preview-note { flex-basis:100%; margin-left:0; }
+ .page { padding:22px 16px; }
+ .masthead-top { flex-direction:column; align-items:flex-start; gap:6px; }
+ .masthead-body { flex-direction:column; gap:12px; }
+ .meta-grid { width:100%; }
+ .meta-cell:last-child { grid-column:1/-1; }
+ .hero-conclusion { font-size:21px; }
+ .chain-ts { flex-basis:100%; }
+ .chain-evidence { margin-left:0; }
+ .chain-node { padding-left:22px; }
+ .query-block { gap:12px; }
+ .ledger { gap:14px; }
+ .stat-value { font-size:20px; }
+ .section-stats { font-size:11px; }
+ .log-entry { margin-left:10px; }
+ .footer-inner { padding:16px; }
+}
+</style></head>
+<body>
+<div class="app-bar"><strong>NightWatch</strong><span>事故分析</span><span class="preview-note">模板預覽 · 使用 message.txt 範例內容</span></div>
+
+<div class="page">
+
+  <header class="masthead">
+    <div class="masthead-top">
+      <span class="kicker">事故分析 <span class="kicker-dim">／ AI 診斷報告</span></span>
+      <span class="case-id">CASE 20260911-091500-a3f9c1</span>
+    </div>
+    <div class="masthead-body">
+      <div class="meta-grid">
+        <div class="meta-cell">
+          <span class="meta-key">主機</span>
+          <span class="meta-val"><span>192.0.2.45</span></span>
+        </div>
+        <div class="meta-cell">
+          <span class="meta-key">分析時間</span>
+          <span class="meta-val">2026-09-11 09:00–10:00（UTC+8）</span>
+        </div>
+        <div class="meta-cell">
+          <span class="meta-key">產生時間</span>
+          <span class="meta-val">2026-09-11 10:04:22（UTC+8）</span>
+        </div>
+      </div>
+      <div class="masthead-stamp">
+        <span class="stamp stamp--critical">嚴重事故</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="ledger"><a class="stat-box stat-coredump" href="#section-coredump"><span class="stat-value">1</span><span class="stat-name">Coredump</span></a>
+<a class="stat-box stat-critical" href="#section-critical"><span class="stat-value">2842</span><span class="stat-name">Critical</span></a>
+<a class="stat-box stat-warning" href="#section-warning"><span class="stat-value">418</span><span class="stat-name">Warning</span></a>
+<a class="stat-box stat-info" href="#section-info"><span class="stat-value">1</span><span class="stat-name">Info</span></a>
+<a class="stat-box stat-noise" href="#section-noise"><span class="stat-value">1284</span><span class="stat-name">Noise</span></a></div>
+
+  <div class="query-block"><span class="query-label">調查問題</span><span class="query-text">9/11 早上九點多前端一直跳 500，幫我看是什麼原因</span></div>
+
+  <div class="tab-bar" role="tablist" aria-label="報告內容">
+    <button class="tab-btn active" id="tab-diagnosis" role="tab" aria-controls="diagnosis-panel" aria-selected="true" data-tab="diagnosis">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      AI 診斷
+    </button>
+    <button class="tab-btn" id="tab-timeline" role="tab" aria-controls="timeline-panel" aria-selected="false" tabindex="-1" data-tab="timeline">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      日誌時間線
+    </button>
+  </div>
+
+  <div class="view-panel view-diagnosis active" id="diagnosis-panel" role="tabpanel" aria-labelledby="tab-diagnosis">
+
+
+        <section class="hero">
+            <div class="hero-kicker">AI 結論 · 已識別根因</div>
+            <h1 class="hero-conclusion">09:15 的大量 500 來自資料庫連線池耗盡：一條排程報表查詢掃了 4,182 萬列且沒有走索引，獨佔連線超過三分鐘，導致線上請求等滿 30 秒都借不到連線。</h1>
+            <div class="hero-support"><span class="hero-category">資源忙碌</span><div class="hero-reasoning"><span class="hero-reasoning-label">分析說明</span><p>錯誤集中在 09:15-09:21 這七分鐘，起點與終點都對得上同一個 query_id：查詢在 09:12 開始、09:21 被取消，連線池在取消後兩秒內恢復正常。同期資料庫本身沒有任何拒絕連線或當機紀錄，所以瓶頸在連線池的可用連線數，不在資料庫。</p></div></div>
+        </section>
+    <div class="chain-section"><div class="section-label"><span class="section-label-text">因果鏈</span><span class="section-label-count">5 個環節</span><span class="section-label-line"></span></div><ol class="chain-rail"><li class="chain-node" style="--i: 0;">  <span class="chain-marker">01</span>  <div class="chain-head">    <span class="chain-ts">2026-09-11T09:12:07+08:00</span>    <span class="chain-src">analytics-worker/job.log</span>    <span class="chain-role chain-role-root">根因</span>          </div>  <details class="chain-raw"><summary>原始日誌</summary><pre class="chain-log">2026-09-11T09:12:07+08:00 analytics-worker [INFO] Start scheduled report query job=daily_summary table=orders range=90d</pre></details>  <p class="chain-reason">排程觸發每日報表查詢，掃描範圍 90 天。</p></li><li class="chain-node" style="--i: 1;">  <span class="chain-marker">02</span>  <div class="chain-head">    <span class="chain-ts">2026-09-11T09:14:02+08:00</span>    <span class="chain-src">db-proxy/pool.log</span>        <span class="chain-count">×412</span>    <a class="chain-evidence" href="#entry-4">[證據 #4]</a>  </div>  <details class="chain-raw"><summary>原始日誌</summary><pre class="chain-log">2026-09-11T09:14:02+08:00 db-proxy [WARN] Connection pool usage 50/50 pool=primary waiting=38 max_wait_ms=30000</pre></details>  <p class="chain-reason">兩分鐘後連線池 50 條全部借出，開始有請求排隊等待。</p></li><li class="chain-node" style="--i: 2;">  <span class="chain-marker">03</span>  <div class="chain-head">    <span class="chain-ts">2026-09-11T09:15:12+08:00</span>    <span class="chain-src">db-proxy/pool.log</span>            <a class="chain-evidence" href="#entry-3">[證據 #3]</a>  </div>  <details class="chain-raw"><summary>原始日誌</summary><pre class="chain-log">2026-09-11T09:15:12+08:00 db-proxy [ERROR] Query exceeded 180s and still running query_id=q-77412 rows_scanned=41827600 index=none</pre></details>  <p class="chain-reason">那條查詢跑了 180 秒還沒結束，掃描 4,182 萬列且未走索引 — 這是佔住連線的源頭。</p></li><li class="chain-node" style="--i: 3;">  <span class="chain-marker">04</span>  <div class="chain-head">    <span class="chain-ts">2026-09-11T09:15:11+08:00</span>    <span class="chain-src">api-server/app.log</span>        <span class="chain-count">×2,841</span>    <a class="chain-evidence" href="#entry-2">[證據 #2]</a>  </div>  <details class="chain-raw"><summary>原始日誌</summary><pre class="chain-log">2026-09-11T09:15:11+08:00 api-server [ERROR] Failed to acquire connection from pool after 30000ms pool=primary route=GET /v1/orders</pre></details>  <p class="chain-reason">線上請求等滿 30 秒仍借不到連線，直接失敗。</p></li><li class="chain-node" style="--i: 4;">  <span class="chain-marker">05</span>  <div class="chain-head">    <span class="chain-ts">2026-09-11T09:15:14+08:00</span>    <span class="chain-src">gateway/access.log</span>    <span class="chain-role chain-role-endpoint">使用者影響</span>    <span class="chain-count">×2,841</span>      </div>  <details class="chain-raw"><summary>原始日誌</summary><pre class="chain-log">2026-09-11T09:15:14+08:00 gateway [ERROR] Upstream returned 500 for 2841 requests in 60s upstream=api-server error_rate=0.71</pre></details>  <p class="chain-reason">七成請求回 500 — 使用者看到的就是這裡。</p></li></ol></div>
+    <div class="diagnosis-panels">
+            <div class="summary-panel">
+                <h4>診斷總結</h4>
+                <div class="summary-text">分析視窗 09:00-10:00 共 184,562 筆 log。錯誤集中在 09:15-09:21 這七分鐘，起訖時間與那條排程查詢的生命週期完全重疊，屬於單一原因而非多重問題。資料庫端沒有拒絕連線或當機紀錄，佐證瓶頸在連線池而不在資料庫。另外偵測到一次指標收集程序崩潰，發生在連線池變動的路徑上，是獨立的程式缺陷，不是這次故障的原因。</div>
+            </div>
+            <div class="recommendations-panel">
+                <h4>建議處理方式</h4>
+                <div class="rec-list">
+                <div class="rec-item">
+                    <span class="rec-num">1</span>
+                    <div class="rec-body">
+                        <span class="rec-action">替報表查詢用到的欄位建索引，或把報表改走唯讀副本</span>
+                        <span class="rec-reason">這條查詢沒有索引就一定會全表掃描，只要再跑一次就會重演</span>
+                    </div>
+                </div>
+                <div class="rec-item">
+                    <span class="rec-num">2</span>
+                    <div class="rec-body">
+                        <span class="rec-action">給分析、報表類的連線獨立一個連線池，跟線上請求分開</span>
+                        <span class="rec-reason">目前任何一條慢查詢都能把線上請求的連線吃光，沒有隔離</span>
+                    </div>
+                </div>
+                <div class="rec-item">
+                    <span class="rec-num">3</span>
+                    <div class="rec-body">
+                        <span class="rec-action">將 /var/crash/metrics-collector.21874.core 附到 issue</span>
+                        <span class="rec-reason">崩潰點在 pool_stats.c:642 的統計走訪路徑，需要程式端修正</span>
+                    </div>
+                </div></div>
+            </div></div>
+
+    <nav class="section-nav"><a class="nav-item" data-accent="error" href="#section-coredump"><span class="nav-label">Coredump</span><span class="nav-count">1</span></a><a class="nav-item" data-accent="error" href="#section-critical"><span class="nav-label">Critical</span><span class="nav-count">2842</span></a><a class="nav-item" data-accent="warning" href="#section-warning"><span class="nav-label">Warning</span><span class="nav-count">418</span></a><a class="nav-item" data-accent="muted" href="#section-info"><span class="nav-label">Info</span><span class="nav-count">1</span></a><a class="nav-item" data-accent="muted" href="#section-noise"><span class="nav-label">Noise</span><span class="nav-count">1284</span></a></nav>
+
+    <details class="report-section" data-accent="error" id="section-coredump" open>
+        <summary class="section-head">
+            <span class="section-chevron">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            </span>
+            <span class="seal section-seal">Coredump</span>
+            <span class="section-sub">系統崩潰偵測</span>
+            <span class="section-rule"></span>
+            <span class="section-stats">
+                <span class="stat-unique">1</span>
+                <span class="stat-label">組</span>
+                <span class="stat-sep">·</span>
+                <span class="stat-total">1</span>
+                <span class="stat-label">筆</span>
+            </span>
+        </summary>
+        <div class="section-body">
+            <p class="section-summary">1 個程序崩潰：指標收集在連線池變動時讀到已回收的結構。</p>
+            <div class="log-entries">
+
+        <details class="log-entry" id="entry-1" style="--delay:0.00s">
+            <summary class="log-entry-header">
+                <span class="log-chevron">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                </span>
+                <span class="entry-num">#1</span>
+                <span class="seal seal-sm sev-critical">CRITICAL</span>
+                <span class="log-count">×1</span>
+                <span class="match-badge match-known">KNOWN</span> <span class="entry-event-id">metrics-collector/src/stats/pool_stats.c:642</span>
+                <span class="entry-src">system/kernel.log +1</span>
+                <span class="log-preview">2026-09-11T09:15:47+08:00 kernel [ALERT] metrics-collector[21874]: segfault at 0…</span>
+                <span class="log-time">2026-09-11T09:15:47+08:00</span>
+            </summary>
+            <div class="log-entry-body">
+
+        <div class="log-detail">
+            <pre class="log-content">2026-09-11T09:15:47+08:00 kernel [ALERT] metrics-collector[21874]: segfault at 0000000000000018 ip 00007f2a91c4b3e1 sp 00007ffd2c1a9870 error 4 in libstats.so.1.0
+  core dumped to /var/crash/metrics-collector.21874.core</pre>
+            <div class="log-interpretation">
+                <span class="interp-rule"></span>
+                <p>連線池被塞爆的同時，指標收集程序在讀取連線統計時存取到已經被回收的結構，程序直接被 signal 11 打掉。</p>
+            </div>
+            <div class="log-annotation">
+                <div class="ann-header">研發註解</div>
+                <p class="ann-text">Means: the stats sweep walks the connection list without holding the pool lock, so an entry freed mid-walk is read after release. Next: grep the log for &#39;pool resize&#39; near this timestamp and check whether a resize overlapped the stats interval.</p>
+                <p class="ann-interp">這次的 log 就是這個情況：連線池在同一秒內被調整大小，剛好撞上 10 秒一次的指標收集。</p>
+            </div>
+            <div class="log-meta">
+                <span class="meta-sources">system/kernel.log, metrics-collector/collector.log</span>
+                <span class="file-loc">metrics-collector/src/stats/pool_stats.c:642</span>
+            </div>
+        </div>
+            </div>
+        </details>
+            </div>
+        </div>
+    </details>
+
+    <details class="report-section" data-accent="error" id="section-critical" open>
+        <summary class="section-head">
+            <span class="section-chevron">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            </span>
+            <span class="seal section-seal">Critical</span>
+            <span class="section-sub">直接導致故障的嚴重問題</span>
+            <span class="section-rule"></span>
+            <span class="section-stats">
+                <span class="stat-unique">2</span>
+                <span class="stat-label">組</span>
+                <span class="stat-sep">·</span>
+                <span class="stat-total">2842</span>
+                <span class="stat-label">筆</span>
+            </span>
+        </summary>
+        <div class="section-body">
+            <p class="section-summary">連線池被一條全表掃描的查詢佔滿，所有請求借不到連線而回 500。</p>
+            <div class="log-entries">
+
+        <details class="log-entry" id="entry-2" style="--delay:0.00s">
+            <summary class="log-entry-header">
+                <span class="log-chevron">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                </span>
+                <span class="entry-num">#2</span>
+                <span class="seal seal-sm sev-critical">CRITICAL</span>
+                <span class="log-count">×2841</span>
+                <span class="match-badge match-known">KNOWN</span> <span class="entry-event-id">api-server/src/db/pool.go:311</span>
+                <span class="entry-src">api-server/app.log</span>
+                <span class="log-preview">2026-09-11T09:15:11+08:00 api-server [ERROR] Failed to acquire connection from p…</span>
+                <span class="log-time">2026-09-11T09:15:11+08:00 → 2026-09-11T09:21:28+08:00</span>
+            </summary>
+            <div class="log-entry-body">
+
+        <div class="log-detail">
+            <pre class="log-content">2026-09-11T09:15:11+08:00 api-server [ERROR] Failed to acquire connection from pool after 30000ms pool=primary route=GET /v1/orders</pre>
+            <div class="log-interpretation">
+                <span class="interp-rule"></span>
+                <p>每一個進來的請求都要先跟連線池借一條資料庫連線，等滿 30 秒都借不到就直接放棄 — 這就是使用者看到的 500。</p>
+            </div>
+            <div class="log-annotation">
+                <div class="ann-header">研發註解</div>
+                <p class="ann-text">Means: the pool is exhausted, not the database — connections are held open by something upstream rather than refused. Next: grep the log for &#39;pool usage&#39; and for any query line reporting a duration above the pool&#39;s max wait.</p>
+                <p class="ann-interp">照 annotation 指的方向往前查，確實先出現連線池滿載(證據 #4)，再往前是那條跑了 180 秒還沒結束的查詢 (證據 #3)。</p>
+            </div>
+            <div class="log-meta">
+                <span class="meta-sources">api-server/app.log</span>
+                <span class="file-loc">api-server/src/db/pool.go:311</span>
+            </div>
+        </div>
+            </div>
+        </details>
+
+        <details class="log-entry" id="entry-3" style="--delay:0.03s">
+            <summary class="log-entry-header">
+                <span class="log-chevron">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                </span>
+                <span class="entry-num">#3</span>
+                <span class="seal seal-sm sev-critical">CRITICAL</span>
+                <span class="log-count">×1</span>
+                <span class="match-badge match-known">KNOWN</span> <span class="entry-event-id">db-proxy/src/query/executor.go:358</span>
+                <span class="entry-src">db-proxy/pool.log +1</span>
+                <span class="log-preview">2026-09-11T09:15:12+08:00 db-proxy [ERROR] Query exceeded 180s and still running…</span>
+                <span class="log-time">2026-09-11T09:15:12+08:00</span>
+            </summary>
+            <div class="log-entry-body">
+
+        <div class="log-detail">
+            <pre class="log-content">2026-09-11T09:15:12+08:00 db-proxy [ERROR] Query exceeded 180s and still running query_id=q-77412 rows_scanned=41827600 index=none</pre>
+            <div class="log-interpretation">
+                <span class="interp-rule"></span>
+                <p>排程報表的查詢掃了 4,182 萬列而且沒有走索引，一條查詢就把連線佔住超過三分鐘。</p>
+            </div>
+            <div class="log-annotation">
+                <div class="ann-header">研發註解</div>
+                <p class="ann-text">Means: index=none on a table this size means a full scan — the query will hold its connection until it finishes or is cancelled. Next: grep the log for the same query_id to find when it started and whether it ever reported completion.</p>
+                <p class="ann-interp">同一個 query_id 從 09:12 開始，直到 09:21 被取消才結束。</p>
+            </div>
+            <div class="log-meta">
+                <span class="meta-sources">db-proxy/pool.log, analytics-worker/job.log</span>
+                <span class="file-loc">db-proxy/src/query/executor.go:358</span>
+            </div>
+        </div>
+            </div>
+        </details>
+            </div>
+        </div>
+    </details>
+
+    <details class="report-section" data-accent="warning" id="section-warning" open>
+        <summary class="section-head">
+            <span class="section-chevron">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            </span>
+            <span class="seal section-seal">Warning</span>
+            <span class="section-sub">可能相關但未確認為根因</span>
+            <span class="section-rule"></span>
+            <span class="section-stats">
+                <span class="stat-unique">2</span>
+                <span class="stat-label">組</span>
+                <span class="stat-sep">·</span>
+                <span class="stat-total">418</span>
+                <span class="stat-label">筆</span>
+            </span>
+        </summary>
+        <div class="section-body">
+            <p class="section-summary">連線池滿載七分鐘；服務 token 有過期重連但已自動恢復。</p>
+            <div class="log-entries">
+
+        <details class="log-entry" id="entry-4" style="--delay:0.00s">
+            <summary class="log-entry-header">
+                <span class="log-chevron">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                </span>
+                <span class="entry-num">#4</span>
+                <span class="seal seal-sm sev-warning">WARNING</span>
+                <span class="log-count">×412</span>
+                <span class="match-badge match-unknown">UNKNOWN</span>
+                <span class="entry-src">db-proxy/pool.log +2</span>
+                <span class="log-preview">2026-09-11T09:14:02+08:00 db-proxy [WARN] Connection pool usage 50/50 pool=prima…</span>
+                <span class="log-time">2026-09-11T09:14:02+08:00 → 2026-09-11T09:21:29+08:00</span>
+            </summary>
+            <div class="log-entry-body">
+
+        <div class="log-detail">
+            <pre class="log-content">2026-09-11T09:14:02+08:00 db-proxy [WARN] Connection pool usage 50/50 pool=primary waiting=38 max_wait_ms=30000</pre>
+            <div class="unannotated-tag">尚無研發註解</div>
+
+            <div class="log-interpretation">
+                <span class="interp-rule"></span>
+                <p>連線池 50 條全部借出、還有 38 個請求在排隊，整整七分鐘都維持在滿載，中間沒有回到正常過。</p>
+            </div>
+        </div>
+            </div>
+        </details>
+
+        <details class="log-entry" id="entry-5" style="--delay:0.03s">
+            <summary class="log-entry-header">
+                <span class="log-chevron">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                </span>
+                <span class="entry-num">#5</span>
+                <span class="seal seal-sm sev-warning">WARNING</span>
+                <span class="log-count">×6</span>
+                <span class="match-badge match-known">KNOWN</span> <span class="entry-event-id">api-server/src/auth/session.go:207</span>
+                <span class="entry-src">api-server/app.log</span>
+                <span class="log-preview">2026-09-11T09:16:02+08:00 api-server [WARN] Service token refresh returned 401, …</span>
+                <span class="log-time">2026-09-11T09:16:02+08:00 → 2026-09-11T09:44:18+08:00</span>
+            </summary>
+            <div class="log-entry-body">
+
+        <div class="log-detail">
+            <pre class="log-content">2026-09-11T09:16:02+08:00 api-server [WARN] Service token refresh returned 401, re-authenticating host=auth.example.com attempt=1</pre>
+            <div class="log-interpretation">
+                <span class="interp-rule"></span>
+                <p>服務之間用的 token 過期後自動重新認證成功，本身不是失敗，但容易被誤認成這次故障的原因。</p>
+            </div>
+            <div class="log-annotation">
+                <div class="ann-header">研發註解</div>
+                <p class="ann-text">Means: a 401 here is normal token rotation and self-heals; it only matters if the retry also fails. Next: grep the log for &#39;re-authenticating&#39; and confirm a matching &#39;session established&#39; line follows each one.</p>
+                <p class="ann-interp">六次 401 後面都有對應的重新建立連線成功，可以排除認證問題。</p>
+            </div>
+            <div class="log-meta">
+                <span class="meta-sources">api-server/app.log</span>
+                <span class="file-loc">api-server/src/auth/session.go:207</span>
+            </div>
+        </div>
+            </div>
+        </details>
+            </div>
+        </div>
+    </details>
+
+    <details class="report-section" data-accent="muted" id="section-info">
+        <summary class="section-head">
+            <span class="section-chevron">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            </span>
+            <span class="seal section-seal">Info</span>
+            <span class="section-sub">值得記錄但不影響功能</span>
+            <span class="section-rule"></span>
+            <span class="section-stats">
+                <span class="stat-unique">1</span>
+                <span class="stat-label">組</span>
+                <span class="stat-sep">·</span>
+                <span class="stat-total">1</span>
+                <span class="stat-label">筆</span>
+            </span>
+        </summary>
+        <div class="section-body">
+            <p class="section-summary">查詢取消後連線池立即恢復，無連線洩漏。</p>
+            <div class="log-entries">
+
+        <details class="log-entry" id="entry-6" style="--delay:0.00s">
+            <summary class="log-entry-header">
+                <span class="log-chevron">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                </span>
+                <span class="entry-num">#6</span>
+                <span class="seal seal-sm sev-info">INFO</span>
+                <span class="log-count">×1</span>
+                <span class="match-badge match-known">KNOWN</span> <span class="entry-event-id">db-proxy/src/pool/manager.go:512</span>
+                <span class="entry-src">db-proxy/pool.log</span>
+                <span class="log-preview">2026-09-11T09:21:30+08:00 db-proxy [INFO] Connection pool recovered 6/50 pool=pr…</span>
+                <span class="log-time">2026-09-11T09:21:30+08:00</span>
+            </summary>
+            <div class="log-entry-body">
+
+        <div class="log-detail">
+            <pre class="log-content">2026-09-11T09:21:30+08:00 db-proxy [INFO] Connection pool recovered 6/50 pool=primary after query_id=q-77412 was cancelled</pre>
+            <div class="unannotated-tag">尚無研發註解</div>
+
+            <div class="log-interpretation">
+                <span class="interp-rule"></span>
+                <p>那條查詢被取消之後，連線池兩秒內就降到 6/50，代表故障範圍就是這條查詢，沒有其他連線洩漏。</p>
+            </div>
+        </div>
+            </div>
+        </details>
+            </div>
+        </div>
+    </details>
+
+    <details class="report-section" data-accent="muted" id="section-noise">
+        <summary class="section-head">
+            <span class="section-chevron">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            </span>
+            <span class="seal section-seal">Noise</span>
+            <span class="section-sub">已知非問題 — 誤報或無害 log</span>
+            <span class="section-rule"></span>
+            <span class="section-stats">
+                <span class="stat-unique">1</span>
+                <span class="stat-label">組</span>
+                <span class="stat-sep">·</span>
+                <span class="stat-total">1284</span>
+                <span class="stat-label">筆</span>
+            </span>
+        </summary>
+        <div class="section-body">
+            <p class="section-summary">已知無害的健康檢查警告。</p>
+            <div class="log-entries">
+
+        <details class="log-entry" id="entry-7" style="--delay:0.00s">
+            <summary class="log-entry-header">
+                <span class="log-chevron">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                </span>
+                <span class="entry-num">#7</span>
+                <span class="seal seal-sm sev-noise">NOISE</span>
+                <span class="log-count">×1284</span>
+                <span class="match-badge match-unknown">UNKNOWN</span>
+                <span class="entry-src">system/monitor.log</span>
+                <span class="log-preview">2026-09-11T09:00:01+08:00 health-monitor [WARN] Probe endpoint /debug/vars retur…</span>
+                <span class="log-time">2026-09-11T09:00:01+08:00 → 2026-09-11T09:59:58+08:00</span>
+            </summary>
+            <div class="log-entry-body">
+
+        <div class="log-detail">
+            <pre class="log-content">2026-09-11T09:00:01+08:00 health-monitor [WARN] Probe endpoint /debug/vars returned 404, skipped</pre>
+            <div class="unannotated-tag">尚無研發註解</div>
+
+            <div class="log-interpretation">
+                <span class="interp-rule"></span>
+                <p>健康檢查探測一個不存在的端點所產生的例行警告，與這次故障無關。</p>
+            </div>
+        </div>
+            </div>
+        </details>
+            </div>
+        </div>
+    </details>
+  </div>
+
+  <div class="view-panel view-timeline" id="timeline-panel" role="tabpanel" aria-labelledby="tab-timeline" hidden>
+    <p class="timeline-note">以下為模板提供的日誌分組，依首次出現時間排序；不是完整原始日誌串流。</p>
+<div class="timeline-tools"><label>搜尋日誌 <input type="search" id="log-search" placeholder="關鍵字或來源"></label><label>分類 <select id="log-filter"><option value="all">全部</option><option value="coredump">Coredump</option><option value="critical">Critical</option><option value="warning">Warning</option><option value="info">Info</option><option value="noise">Noise</option></select></label><span id="tl-stats" role="status"></span></div>
+    <div id="tl-entries"></div>
+    <div class="tl-loading" id="tl-loading" style="display:none">
+      <div class="tl-spinner"></div>
+      <span>Loading logs…</span>
+    </div>
+    <div class="tl-sentinel" id="tl-sentinel"></div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">NightWatch · 範例報告，未接真實事故資料</div>
+    <div class="footer-meta">
+      <span>20260911-091500-a3f9c1</span>
+      <span class="footer-dot"></span>
+      <span>2026-09-11 10:04:22（UTC+8）</span>
+    </div>
+  </div>
+</footer>
+
+
+<script>
+// This preview renders only the content supplied in message.txt. No API calls.
+const tabs=Array.from(document.querySelectorAll('[role=tab]'));
+function showTab(name,focus=false){
+  for(const tab of tabs){
+    const active=tab.dataset.tab===name;
+    tab.classList.toggle('active',active);
+    tab.setAttribute('aria-selected',String(active));
+    tab.tabIndex=active?0:-1;
+    document.getElementById(tab.getAttribute('aria-controls')).hidden=!active;
+    if(active&&focus)tab.focus();
+  }
+}
+tabs.forEach((tab,index)=>{
+  tab.addEventListener('click',()=>showTab(tab.dataset.tab));
+  tab.addEventListener('keydown',event=>{
+    if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+    event.preventDefault();
+    const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
+    showTab(tabs[next].dataset.tab,true);
+  });
+});
+function revealEvidence(hash){
+  let id;
+  try{id=decodeURIComponent(hash.slice(1));}catch{return;}
+  const target=document.getElementById(id);
+  if(!target||!target.closest('#diagnosis-panel'))return;
+  showTab('diagnosis');
+  let element=target;
+  while(element){if(element.tagName==='DETAILS')element.open=true;element=element.parentElement;}
+  target.scrollIntoView({block:'start',behavior:'auto'});
+}
+document.querySelectorAll('a[href^="#"]').forEach(link=>link.addEventListener('click',event=>{
+  event.preventDefault();
+  const hash=link.getAttribute('href');
+  history.replaceState(null,'',hash);
+  revealEvidence(hash);
+}));
+window.addEventListener('hashchange',()=>revealEvidence(location.hash));
+const entries=Array.from(document.querySelectorAll('.log-entry')).map(entry=>({
+  id:entry.id,
+  group:entry.closest('.report-section').id.replace('section-',''),
+  first:entry.querySelector('.log-time').textContent.trim().split(' → ')[0],
+  source:entry.querySelector('.entry-src').textContent.trim(),
+  count:entry.querySelector('.log-count').textContent.trim(),
+  content:entry.querySelector('.log-detail'),
+  text:entry.textContent.toLowerCase()
+})).sort((a,b)=>Date.parse(a.first)-Date.parse(b.first));
+const labels={coredump:'Coredump',critical:'Critical',warning:'Warning',info:'Info',noise:'Noise'};
+function renderTimeline(){
+  const search=document.getElementById('log-search').value.trim().toLowerCase();
+  const filter=document.getElementById('log-filter').value;
+  const visible=entries.filter(entry=>(filter==='all'||entry.group===filter)&&(!search||entry.text.includes(search)));
+  const container=document.getElementById('tl-entries');
+  container.replaceChildren();
+  document.getElementById('tl-stats').textContent=`${visible.length} / ${entries.length} 組日誌`;
+  for(const entry of visible){
+    const details=document.createElement('details');details.className='timeline-entry';
+    const summary=document.createElement('summary');
+    const time=document.createElement('time');time.dateTime=entry.first;time.textContent=entry.first;
+    const type=document.createElement('span');type.className='timeline-type';type.textContent=labels[entry.group];
+    summary.append(time,type,document.createTextNode(entry.source+'　'+entry.count));
+    details.append(summary,entry.content.cloneNode(true));container.append(details);
+  }
+  if(!visible.length){const empty=document.createElement('p');empty.className='timeline-empty';empty.textContent='沒有符合條件的日誌。';container.append(empty);}
+}
+document.getElementById('log-search').addEventListener('input',renderTimeline);
+document.getElementById('log-filter').addEventListener('change',renderTimeline);
+renderTimeline();
+if(location.hash)revealEvidence(location.hash);
+</script>
+</body></html>
