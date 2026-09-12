@@ -9,3 +9,33 @@ control/nightwatch-control
 deploy/.build/
 shop/shop
 oteldemo/.build/
+
+# Virtual environments
+.venv/
+venv/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Test coverage
+.coverage
+.coverage.*
+htmlcov/
+
+# Build artifacts
+build/
+*.egg-info/
+
+# Local environment variables
+.env
+.env.*
+!.env.example
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
