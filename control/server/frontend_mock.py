@@ -5,9 +5,7 @@ from datetime import datetime, timedelta, timezone
 from threading import RLock
 from uuid import uuid4
 
-
-def timestamp():
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+from time_utils import timestamp
 
 
 def identifier(kind):

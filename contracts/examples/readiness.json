@@ -1,7 +1,0 @@
-{
-  "ready": true,
-  "checks": [
-    { "id": "baseline", "status": "ok", "detail_zh": "基線已完成" }
-  ],
-  "next_step_zh": "可以按故障卡"
-}
