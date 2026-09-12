@@ -22,10 +22,12 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 
 from .prompts import GUARDROOM_PROMPT, GRAPH_SYSTEM_PROMPT, SYSTEM_PROMPT, REPAIR_PROMPT, tool_description
 from .report import InvestigationReportBody, REPORT_VERSION, SUBMIT_DESCRIPTION, submit_definition, validate_submission
+from .memory import MEMORY_PROMPT, MEMORY_TOOL_NAME
 
 Json = dict[str, Any]
 ContextCallback = Callable[[Json], None]
 TOOL_CAPS = {
+    MEMORY_TOOL_NAME: 32768,
     "get_demo_faults": 16384,
     "deactivate_demo_fault": 16384,
     "check_shop_health": 4096,
@@ -208,6 +210,8 @@ def static_instructions(capabilities: Json, report_schema: Json) -> str:
     names = [definition["name"] for definition in capabilities["tools"]]
     graph_mode = "get_graph" in names
     prompt = GRAPH_SYSTEM_PROMPT + GUARDROOM_PROMPT if graph_mode else SYSTEM_PROMPT
+    if MEMORY_TOOL_NAME in names:
+        prompt += MEMORY_PROMPT
     if "deactivate_demo_fault" in names:
         prompt = prompt.replace("a read-only investigator", "an investigator with a bounded demo actuator")
         prompt = prompt.replace("Do not claim repair or verified recovery. No runtime changes are available.", "Only the declared demo actuator can change runtime; never claim business recovery without independent evidence.")

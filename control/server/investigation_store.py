@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from nightwatch_agent.report import REPORT_VERSION
+from nightwatch_agent.memory import build_memory
 
 
 Json = dict[str, Any]
@@ -103,8 +104,52 @@ class InvestigationStore:
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS one_detection_latch
                     ON detections(source) WHERE latched = 1;
+                CREATE TABLE IF NOT EXISTS investigation_memories (
+                    id TEXT PRIMARY KEY REFERENCES sessions(id),
+                    created_seq INTEGER NOT NULL UNIQUE,
+                    memory_json TEXT NOT NULL
+                );
                 """
             )
+            # Existing closed investigations become available on the first upgrade.
+            rows = self.db.execute(
+                """SELECT id FROM sessions WHERE status != 'running'
+                   AND id NOT IN (SELECT id FROM investigation_memories) ORDER BY created_seq"""
+            ).fetchall()
+            for row in rows:
+                self._save_memory_tx(row["id"])
+
+    def _save_memory_tx(self, investigation_id: str) -> None:
+        row = self.db.execute("SELECT * FROM sessions WHERE id=?", (investigation_id,)).fetchone()
+        events = self.db.execute(
+            """SELECT type, payload_json FROM events WHERE investigation_id=?
+               AND type IN ('tool.started', 'tool.failed', 'observation.recorded') ORDER BY seq""",
+            (investigation_id,),
+        ).fetchall()
+        memory = build_memory({
+            **self._summary(row), "report": self._row_json(row, "report_json"),
+            "context": self._row_json(row, "context_json", {}),
+        }, [{"type": event["type"], "payload": json.loads(event["payload_json"])} for event in events])
+        self.db.execute(
+            "INSERT INTO investigation_memories(id, created_seq, memory_json) VALUES (?, ?, ?)",
+            (investigation_id, row["created_seq"], json_text(memory)),
+        )
+
+    def recent_memories(self) -> list[Json]:
+        with self._mutex:
+            rows = self.db.execute(
+                "SELECT memory_json FROM investigation_memories ORDER BY created_seq DESC LIMIT 5"
+            ).fetchall()
+            return [json.loads(row["memory_json"]) for row in rows]
+
+    def memory(self, investigation_id: str) -> Json:
+        with self._mutex:
+            row = self.db.execute(
+                "SELECT memory_json FROM investigation_memories WHERE id=?", (investigation_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError("No closed investigation memory found for this id")
+            return json.loads(row["memory_json"])
 
     def close(self) -> None:
         with getattr(self, "_mutex", threading.RLock()):
@@ -170,6 +215,7 @@ class InvestigationStore:
                 recovered.append(self._append_event_tx(row["id"], "investigation.finished", {
                     "status": "interrupted", "outcome": "interrupted", "reason": report["summary_zh"]
                 }, closed))
+                self._save_memory_tx(row["id"])
         return recovered
 
     def current_detection(self, source: str) -> Json | None:
@@ -308,6 +354,7 @@ class InvestigationStore:
             event = self._append_event_tx(investigation_id, "investigation.finished", {
                 "status": status, "outcome": outcome, "reason": summary_zh
             }, closed)
+            self._save_memory_tx(investigation_id)
             return event
 
     def detail(self, investigation_id: str) -> Json | None:

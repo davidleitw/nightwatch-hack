@@ -2,6 +2,7 @@
 
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
+from .memory import MEMORY_TOOL_NAME
 
 
 class Finding(BaseModel):
@@ -48,7 +49,7 @@ def submit_definition() -> dict:
 
 
 def validate_submission(report: InvestigationReportBody, evidence: list[dict], node_ids: set[str]) -> None:
-    available = {item["id"] for item in evidence}
+    available = {item["id"] for item in evidence if item.get("tool") != MEMORY_TOOL_NAME}
     refs: set[str] = set()
     nodes: set[str] = set()
     for finding in report.findings:

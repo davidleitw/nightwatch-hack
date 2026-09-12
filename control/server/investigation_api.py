@@ -25,7 +25,8 @@ from detector import GraphDetector
 from frontend_live import saved_snapshots
 from investigation_store import ActiveInvestigation, InvestigationStore, RequestConflict
 from nightwatch_agent.graph import GraphAPI
-from nightwatch_agent.loop import Limits, investigate, safe_error
+from nightwatch_agent.loop import Limits, Observation, investigate, safe_error
+from nightwatch_agent.memory import MEMORY_TOOL, MEMORY_TOOL_NAME, memory_opening
 from nightwatch_agent.prompts import tool_description
 from nightwatch_agent.report import InvestigationReportBody
 
@@ -362,9 +363,19 @@ class InvestigationManager:
                     return
                 self.store.append_event(investigation_id, event_type, copy.deepcopy(event.get("payload", {})))
 
-            result = await investigate(model=model, capabilities=data.capabilities, opening=data.opening,
+            capabilities = copy.deepcopy(data.capabilities)
+            capabilities["tools"].append(copy.deepcopy(MEMORY_TOOL))
+            opening = {**memory_opening(self.store.recent_memories()), **data.opening}
+
+            async def query(name: str, args: Json) -> Observation:
+                if name == MEMORY_TOOL_NAME:
+                    return Observation(self.store.memory(args["id"]), "investigation_memory", 0,
+                                       "讀取歷史排查案例；不是本次系統狀態的觀測。")
+                return await data.query(name, args)
+
+            result = await investigate(model=model, capabilities=capabilities, opening=opening,
                                        report_schema=json.loads((SCHEMAS / "agent-report.schema.json").read_text()),
-                                       backend=data.query, limits=self.limits, on_event=on_event,
+                                       backend=query, limits=self.limits, on_event=on_event,
                                        on_context=on_context)
             evidence, usage = result.evidence, result.usage
             if context is not None:

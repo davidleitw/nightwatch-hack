@@ -53,3 +53,26 @@ PYTHONPATH=control control/.venv/bin/python -m unittest discover -s control/test
 ```
 
 這些測試包含模型替身，通過不等於真實模型端到端驗證。Monitor 使用方式見 [monitor/README.md](monitor/README.md)。
+
+## 排查案例記憶
+
+HTTP 後端會在每次調查結案時，從既有報告與工具事件產生簡單案例，與結案報告在同一 SQLite transaction 保存；不增加模型呼叫或外部儲存。服務升級時也會補建既有結案案例。失敗、中斷與證據不足的排查同樣保存，保留原始狀態與限制，不當成已解決問題。
+
+每次手動或自動觸發 agent，harness 在第一則 user message 的第一個欄位 `recent_investigations` 注入最近五次結案摘要（不足五次就全部，最新在前）。摘要最多 16 KiB，只帶案例 ID、時間、狀態、結論、症狀與候選根因；文字裁切明確標為 `preview_only`。模型認為可能重複時，以 `get_investigation_memory({"id":"inv-…"})` 讀取詳細案例；已知的更舊 ID 也可查。不存在或尚未結案的 ID 會回明確錯誤。查詢沿用既有工具預算，回覆上限 32 KiB，超量會標明 `truncated`。
+
+案例格式 `nightwatch.investigation-memory.v1` 存在同一資料庫的 `investigation_memories` 表，ID 與原調查相同：
+
+| 欄位 | 內容 |
+| --- | --- |
+| `schema_version`, `id`, `closed_at` | 版本、原調查 ID、結案時間 |
+| `status`, `outcome`, `conclusion` | 執行狀態、結案結果與原報告結論；無有效報告時 conclusion 為 null |
+| `trigger`, `data_scope` | 原觸發原因與觀測範圍；沒有範圍資訊時為 null |
+| `summary_zh`, `symptoms` | 原摘要與 findings，保留 node_ids、evidence_ids |
+| `investigation_steps` | 依順序保存工具、參數、觀測摘要、舊 evidence_id；失敗保留錯誤，未回傳標為 no_result |
+| `root_cause.status` | 有 hypotheses 時為 candidate，沒有則 unknown；不自行升級為確認根因 |
+| `root_cause.candidates` | 原 hypotheses：cause_zh、node_ids、supporting_evidence_ids、counterevidence_ids、uncertainty_zh |
+| `limitations`, `next_steps` | 原限制與後續查證建議 |
+
+模型仍先取得當前 graph，再對照舊候選根因的成立條件、反證、節點、錯誤與時間；須指出當下符合、不符及未知之處。舊案例是查證線索，不能證明事故重演，也不授權重做修復。報告驗證器會拒絕用案例查詢的 evidence ID 支持本次 findings 或 hypotheses；模型必須另外取得當次觀測證據。舊工具步驟不再複製歷史查詢結果，避免案例遞迴膨脹。
+
+完整原始工具結果仍在原調查的 evidence/export；案例本身保存簡化查詢過程，不複製原始日誌或整段對話。資料隨既有 investigation DB 持久化，目前沒有另外的清除政策。本功能接在持久化 HTTP 後端；獨立 CLI 沿用原本單次調查模式。
