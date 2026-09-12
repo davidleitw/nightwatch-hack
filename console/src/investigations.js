@@ -25,15 +25,51 @@ let snapshots = [], timelineBounds = null, cursorTime = null, targetSnapshot = n
 let snapshotBusy = false, snapshotMessage = '', snapshotIndexError = '', snapshotIndexBusy = false;
 let snapshotController = null, snapshotIndexController = null, snapshotRequest = 0, snapshotTimer = null, snapshotPoll = null, lastSnapshotRequest = 0;
 
+function updateGraphMarkup(id, markup) {
+  const container = $(id), range = document.createRange();
+  range.selectNodeContents(container);
+  const fragment = range.createContextualFragment(markup);
+  const key = node => node.nodeType === 1 ? node.getAttribute('data-node') ?? node.getAttribute('data-snapshot') : null;
+  function sync(parent, desired) {
+    const keyed = new Map([...parent.childNodes].filter(node => key(node) !== null).map(node => [key(node), node]));
+    let cursor = parent.firstChild;
+    for (const next of [...desired.childNodes]) {
+      const nextKey = key(next);
+      let current = nextKey === null ? cursor : keyed.get(nextKey);
+      if (!current || key(current) !== nextKey || current.nodeType !== next.nodeType || current.nodeName !== next.nodeName || current.namespaceURI !== next.namespaceURI) {
+        current = next.cloneNode(true);
+        parent.insertBefore(current, cursor);
+      } else {
+        if (current !== cursor) parent.insertBefore(current, cursor);
+        if (current.nodeType === 1) {
+          // Keep a user's expanded node details open across observation updates.
+          const keepOpen = current.localName === 'details';
+          for (const attribute of [...current.attributes]) {
+            if (!(keepOpen && attribute.name === 'open') && !next.hasAttribute(attribute.name)) current.removeAttribute(attribute.name);
+          }
+          for (const attribute of [...next.attributes]) {
+            if (!(keepOpen && attribute.name === 'open') && current.getAttribute(attribute.name) !== attribute.value) current.setAttribute(attribute.name, attribute.value);
+          }
+          sync(current, next);
+        } else if (current.nodeValue !== next.nodeValue) current.nodeValue = next.nodeValue;
+      }
+      cursor = current.nextSibling;
+    }
+    while (cursor) { const next = cursor.nextSibling; cursor.remove(); cursor = next; }
+  }
+  sync(container, fragment);
+}
+
 function timelineItems() {
   return snapshots.filter(item => !timelineBounds || (item.time >= timelineBounds.from && item.time <= timelineBounds.to));
 }
 function renderTimeline() {
   updateStartButton();
   const items = timelineItems(), range = $('snapshot-range');
-  $('graph-mode').textContent = viewingHistory ? '歷史 graph' : '即時 graph';
+  $('graph-mode').textContent = snapshotBusy ? '歷史快照載入中' : viewingHistory ? '歷史 graph' : '即時 graph';
   $('graph-live').disabled = !viewingHistory;
-  $('graph-view-time').textContent = graph ? `${viewingHistory ? '歷史快照' : '即時觀測'} ${localTime(graph.at)} (+08:00) · #${graph.seq}` : snapshotBusy ? '正在讀取歷史快照…' : '目前沒有可顯示的快照';
+  $('graph-view-time').textContent = graph ? `${snapshotBusy ? '目前顯示' : viewingHistory ? '歷史快照' : '即時觀測'} ${localTime(graph.at)} (+08:00) · #${graph.seq}` : snapshotBusy ? '正在讀取歷史快照…' : '目前沒有可顯示的快照';
+  $('graph-canvas').setAttribute('aria-busy', String(snapshotBusy));
   const index = items.findIndex(item => item.seq === targetSnapshot?.seq);
   $('snapshot-prev').disabled = !items.length || (viewingHistory && index === 0);
   $('snapshot-next').disabled = !viewingHistory || !items.length || index === items.length - 1;
@@ -45,7 +81,7 @@ function renderTimeline() {
     $('snapshot-from').textContent = `${localTime(timelineBounds.from)} ${viewingHistory ? '範圍起點' : '最早'}`;
     $('snapshot-to').textContent = `${localTime(timelineBounds.to)} ${viewingHistory ? '範圍終點' : '最新保存'}`;
     const span = timelineBounds.to - timelineBounds.from || 1;
-    $('snapshot-ticks').innerHTML = items.map(item => `<i style="left:${(item.time - timelineBounds.from) / span * 100}%"></i>`).join('');
+    updateGraphMarkup('snapshot-ticks', items.map(item => `<i data-snapshot="${item.seq}" style="left:${(item.time - timelineBounds.from) / span * 100}%"></i>`).join(''));
   } else {
     $('snapshot-from').textContent = $('snapshot-to').textContent = '—';
     $('snapshot-ticks').textContent = '';
@@ -53,7 +89,7 @@ function renderTimeline() {
   const label = viewingHistory ? `游標 ${localTime(cursorTime)}` : `${items.length} 張可用快照`;
   $('snapshot-target').textContent = label;
   range.setAttribute('aria-valuetext', `${label}${targetSnapshot ? `，快照 ${localTime(targetSnapshot.at)}` : ''}，台灣時間`);
-  $('snapshot-note').textContent = snapshotBusy ? `正在載入 ${localTime(targetSnapshot?.at)}；尚未顯示新的圖。` : !items.length ? '目前沒有保留快照；即時觀測仍可使用。' : viewingHistory ? `選取不晚於游標的快照；快照間沒有保存的狀態不補算。右側調查與 Monitor 紀錄仍為即時。` : '拖曳可查看歷史；最右端是最新保存快照。時間均為台灣時間 (+08:00)。';
+  $('snapshot-note').textContent = snapshotBusy ? `正在載入 ${localTime(targetSnapshot?.at)}；${graph ? `暫時保留 ${localTime(graph.at)} 的圖，完成後切換。` : '尚無可顯示的圖。'}` : !items.length ? '目前沒有保留快照；即時觀測仍可使用。' : viewingHistory ? `選取不晚於游標的快照；快照間沒有保存的狀態不補算。右側調查與 Monitor 紀錄仍為即時。` : '拖曳可查看歷史；最右端是最新保存快照。時間均為台灣時間 (+08:00)。';
   $('snapshot-error').textContent = [snapshotIndexError, snapshotMessage].filter(Boolean).join(' ');
   $('snapshot-error').hidden = !snapshotIndexError && !snapshotMessage;
 }
@@ -105,9 +141,9 @@ function selectSnapshot(time, immediate = false) {
     if (immediate && snapshotTimer) { clearTimeout(snapshotTimer); snapshotTimer = null; void fetchSnapshot(item, snapshotRequest); }
     renderTimeline(); return;
   }
-  cancelSnapshot(); targetSnapshot = item ?? null; graph = null; snapshotMessage = '';
+  cancelSnapshot(); targetSnapshot = item ?? null; snapshotMessage = '';
   snapshotBusy = Boolean(item);
-  if (!item) snapshotMessage = '此時間沒有保留快照，請選擇較新的時間。';
+  if (!item) { graph = null; snapshotMessage = '此時間沒有保留快照，請選擇較新的時間。'; }
   renderGraph();
   if (!item) return;
   const request = snapshotRequest;
@@ -127,6 +163,7 @@ async function fetchSnapshot(item, request) {
     graph = value; graphReceivedAt = null; snapshotMessage = '';
   } catch (e) {
     if (disposed || controller.signal.aborted || request !== snapshotRequest) return;
+    graph = null;
     snapshotMessage = e.status === 404 ? '此快照已過期或沒有可用資料。請選擇其他時間。' : `歷史快照讀取失敗：${e.message}`;
     void loadSnapshotIndex();
   } finally {
@@ -221,23 +258,23 @@ function renderGraph() {
   for (const id of ['nodes', 'edges']) { $(id).style.width = `${width}px`; $(id).style.height = `${height}px`; $(id).style.transform = `scale(${zoom})`; }
   $('edges').setAttribute('width', width); $('edges').setAttribute('height', height);
   $('zoom-value').textContent = `${Math.round(zoom * 100)}%`;
-  $('edges').innerHTML = '<defs><marker id="arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0L7 3.5L0 7" fill="none" stroke="#72856c"/></marker></defs>' + graph.edges.map((e, index) => {
+  updateGraphMarkup('edges', '<defs><marker id="arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0L7 3.5L0 7" fill="none" stroke="#72856c"/></marker></defs>' + graph.edges.map((e, index) => {
     const a = positions.get(e.from), b = positions.get(e.to);
     const lane = a.y === b.y ? a.y + 122 + index % 3 * 5 : Math.min(a.y, b.y) + 125 + index % 3 * 5;
     const d = a.y === b.y && Math.abs(a.x - b.x) === 160 ? `M${a.x + (a.x < b.x ? 120 : 0)} ${a.y + 53}H${b.x + (a.x < b.x ? 0 : 120)}` : `M${a.x + 60} ${a.y + 106}V${lane}H${b.x + 60}V${b.y}`;
     return `<path class="edge ${e.observed ? '' : 'unobserved'} ${e.from === selectedNode || e.to === selectedNode ? 'related' : ''}" d="${d}" marker-end="url(#arrow)"><title>${esc(e.from)} → ${esc(e.to)} · ${esc(e.kind)} · ${e.observed ? '已觀測' : '近期未觀測'}</title></path>`;
-  }).join('');
-  $('nodes').innerHTML = graph.nodes.map(n => {
+  }).join(''));
+  updateGraphMarkup('nodes', graph.nodes.map(n => {
     const p = positions.get(n.id);
     const values = {traffic: number(n.traffic, ' req/s'), errors: number(n.errors, '%', 100), latency: number(n.p95_ms, ' ms'), saturation: number(n.saturation, '%', 100), liveness: n.alive === true ? 'alive: true' : n.alive === false ? 'alive: false' : '—'};
     return `<button class="graph-node ${esc(n.kind)} ${selectedNode === n.id ? 'selected' : ''} ${matches.has(n.id) ? '' : 'dim'}" data-node="${esc(n.id)}" style="left:${p.x}px;top:${p.y}px" aria-pressed="${selectedNode === n.id}"><span class="node-name">${esc(n.id)}</span><span class="node-meta ${esc(n.status)}"><span><i class="dot ${esc(n.status)}"></i>${esc(health[n.status])}</span><span>觀測</span></span><span class="node-value">${esc(values[n.primary_axis] ?? '主要量測 —')}</span></button>`;
-  }).join('');
+  }).join(''));
   $('nodes').querySelectorAll('[data-node]').forEach(button => button.onclick = () => locateNode(button.dataset.node));
-  $('sources').innerHTML = '<span>觀測來源</span>' + ['prometheus', 'jaeger', 'logstore'].map(key => {
+  updateGraphMarkup('sources', '<span>觀測來源</span>' + ['prometheus', 'jaeger', 'logstore'].map(key => {
     const s = graph.sources[key];
     return `<span>${key} · ${s?.ok === true ? '可用' : s?.ok === false ? '不可用' : '無資料'} · ${esc(number(s?.age_secs, ' 秒前'))}</span>`;
-  }).join('');
-  $('footer-status').textContent = `${viewingHistory ? '歷史' : '即時'}快照 #${graph.seq} · 觀測時間 ${localTime(graph.at)} (+08:00)${viewingHistory ? '；右側調查與 Monitor 紀錄仍為即時' : ` · 後端接收 ${at(graphReceivedAt)}；心跳不代表新量測`}`;
+  }).join(''));
+  $('footer-status').textContent = `${snapshotBusy ? '目前顯示' : viewingHistory ? '歷史' : '即時'}快照 #${graph.seq} · 觀測時間 ${localTime(graph.at)} (+08:00)${viewingHistory ? '；右側調查與 Monitor 紀錄仍為即時' : ` · 後端接收 ${at(graphReceivedAt)}；心跳不代表新量測`}`;
   renderNode();
 }
 function locateNode(id) {
@@ -248,9 +285,9 @@ function locateNode(id) {
 }
 function renderNode() {
   const n = graph?.nodes.find(n => n.id === selectedNode);
-  if (!n) { $('node-detail').innerHTML = '<div class="empty">點選節點查看後端量測。</div>'; return; }
+  if (!n) { updateGraphMarkup('node-detail', '<div class="empty">點選節點查看後端量測。</div>'); return; }
   const metrics = [['請求量', number(n.traffic, ' req/s')], ['錯誤率', number(n.errors, '%', 100)], ['P95', number(n.p95_ms, ' ms')], ['飽和度', number(n.saturation, '%', 100)], ['alive', n.alive === true ? 'true' : n.alive === false ? 'false' : '—']];
-  $('node-detail').innerHTML = `<div class="node-detail-top"><h3>${esc(n.id)}</h3><span class="${esc(n.status)}">${esc(health[n.status])}</span></div><div class="node-metrics">${metrics.map(([label, value]) => `<div><span class="metric-label">${label}</span><strong>${esc(value)}</strong></div>`).join('')}</div><p class="report-note">alive 與來源量測的定義由後端決定；調查結束不會改變服務健康。</p><details><summary>原始節點與相鄰連線</summary>${raw({node: n, edges: graph.edges.filter(e => e.from === n.id || e.to === n.id)})}</details>`;
+  updateGraphMarkup('node-detail', `<div class="node-detail-top"><h3>${esc(n.id)}</h3><span class="${esc(n.status)}">${esc(health[n.status])}</span></div><div class="node-metrics">${metrics.map(([label, value]) => `<div><span class="metric-label">${label}</span><strong>${esc(value)}</strong></div>`).join('')}</div><p class="report-note">alive 與來源量測的定義由後端決定；調查結束不會改變服務健康。</p><details><summary>原始節點與相鄰連線</summary>${raw({node: n, edges: graph.edges.filter(e => e.from === n.id || e.to === n.id)})}</details>`);
 }
 
 function activityHTML(id, terminal = false, sourceFilter = 'all') {
