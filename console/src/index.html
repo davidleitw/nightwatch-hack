@@ -6,7 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'">
   <title>NightWatch · 服務拓樸與事故</title>
   <link rel="stylesheet" href="app.css">
-  <script type="module" src="app.js"></script>
+  <script type="module" src="workspace.js"></script>
 </head>
 <body>
 <header><a class="brand" href="#topology"><span class="brand-mark" aria-hidden="true">◉</span>NightWatch</a><nav aria-label="主要導覽"><a href="#topology" id="nav-topology">服務拓樸</a><a href="#incidents" id="nav-incidents">事故列表 <span id="nav-count">—</span></a></nav><div class="header-end"><span id="connection" role="status">載入中</span><label class="source-select">資料來源<select id="source"><option value="live">即時 API</option><option value="recording">專案事故錄影</option></select></label></div></header>
@@ -18,7 +18,7 @@
       <p>目前連線：<strong id="connection-target">正在讀取…</strong></p>
       <div class="connection-check-row"><button id="check-connection" type="button" disabled>檢查目前連線</button><span id="connection-check" role="status">檢查狀態 API 與即時推播；不會修改後端。</span></div>
       <label for="control-url">部署時的 control API 網址</label>
-      <input id="control-url" type="url" placeholder="http://127.0.0.1:3300" spellcheck="false" autocomplete="off">
+      <input id="control-url" type="url" placeholder="http://127.0.0.1:8001" spellcheck="false" autocomplete="off">
       <p>填入前端伺服器能連到的 control 網址。購物網站首頁不是狀態 API。</p>
       <pre id="connect-command" aria-label="啟動指令"></pre>
       <p id="command-note"></p>
