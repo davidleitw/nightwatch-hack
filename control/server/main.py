@@ -6,6 +6,7 @@ from fastapi import FastAPI, Query
 from pydantic import BaseModel, Field
 
 from frontend_api import install_frontend
+from investigation_api import install_investigations
 
 
 class Trend(BaseModel):
@@ -126,3 +127,4 @@ def get_graph(
 
 
 install_frontend(app, graph_provider=dummy_graph)
+install_investigations(app)

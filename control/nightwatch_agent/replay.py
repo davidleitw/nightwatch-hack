@@ -52,7 +52,7 @@ class Recording:
         ]
         for definition in self.capabilities["tools"]:
             queries = [call["args"] for call in self.calls if call["tool"] == definition["name"]]
-            definition["summary_zh"] += "。此為固定錄影，只能查詢這些參數：" + encode(queries)
+            definition["recorded_queries"] = queries
         with (directory / "snapshots.jsonl").open() as snapshots:
             before = [json.loads(line) for line in snapshots]
         before = [snapshot for snapshot in before if snapshot["t"] <= 0]
@@ -63,6 +63,7 @@ class Recording:
         # Do not pass closed-incident state, the old hypothesis, faults or truth to a real model.
         self.opening = {
             "mode": "recorded_observations",
+            "time_reference": {"kind": "incident_detection", "at": incident["detected_at"]},
             "detection": incident["detection"],
             "pinned_window": {"from_t": min(s["t"] for s in before), "to_t": current["t"], "count": len(before)},
             "nodes": [{key: node.get(key) for key in fields} for node in current["nodes"]],
@@ -74,7 +75,7 @@ class Recording:
         for call in self.calls:
             if call["tool"] == name and call["args"] == args:
                 return copy.deepcopy(call["observation"])
-        raise LookupError("錄影沒有這組查詢；不能推測或製造結果")
+        raise LookupError("This query was not captured in the recording; no result can be inferred or fabricated")
 
     def scripted_model(self) -> FunctionModel:
         """Exercise framework dispatch with recorded calls, not model reasoning."""
